@@ -518,6 +518,18 @@
             } else if (data.event === 'motion') { instability[data.jugador] += data.valor; }
             else if (data.event === 'clash-start') { isColliding = true; collisionGroup.visible = true; clashX = 0; }
             else if (data.event === 'clash-end') { isColliding = false; collisionGroup.visible = false; beamL.group.visible = false; beamR.group.visible = false; }
+            else if (data.event === 'rematch') {
+                // Reiniciar vida
+                healthP1 = 100; healthP2 = 100;
+                document.getElementById('hp-p1').style.width = '100%';
+                document.getElementById('hp-p2').style.width = '100%';
+                // Limpiar visuales
+                isColliding = false;
+                collisionGroup.visible = false;
+                beamL.group.visible = false;
+                beamR.group.visible = false;
+                clashX = 0;
+            }
         });
     </script>
 </body>

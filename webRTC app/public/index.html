@@ -222,7 +222,7 @@
 <div id="end-screen">
     <div id="end-ui">
         <h1 id="end-status-text">VICTORIA</h1>
-        <button id="btn-restart" onclick="location.reload()">Nuevo Duelo</button>
+        <button id="btn-restart" onclick="requestRematch()">Nuevo Duelo</button>
     </div>
 </div>
 
@@ -582,6 +582,9 @@ function handleP2PMessage(msg) {
                 showEndScreen('defeat');
             }
             break;
+        case 'rematch':
+            resetGame();
+            break;
     }
 }
 
@@ -771,6 +774,47 @@ function showEndScreen(state) {
     textEl.style.color = theme.textColor;
 
     initEndScene(theme);
+}
+
+function resetGame() {
+    // 1. Reiniciar variables de estado
+    health = 100;
+    isProtected = false;
+    isDisarmed = false;
+    spellCooldown = false;
+    isInClash = false;
+    pendingMySpell = null;
+
+    // 2. Reiniciar UI
+    document.getElementById('health-bar').style.width = '100%';
+    document.getElementById('health-bar').style.background = 'linear-gradient(to right, #22c55e, #16a34a)';
+    document.getElementById('spell-label').textContent = '';
+    document.getElementById('spell-status').className = '';
+    document.getElementById('combat').classList.remove('is-illuminated');
+
+    // 3. Ocultar pantalla final y volver al combate
+    document.getElementById('end-screen').style.display = 'none';
+    document.getElementById('combat').style.display = 'block';
+
+    // 4. Limpiar Three.js de fin de juego
+    if (endRenderer) {
+        endRenderer.dispose();
+        const canvas = document.querySelector('#end-screen canvas');
+        if (canvas) canvas.remove();
+    }
+}
+
+function requestRematch() {
+    // Avisar al rival por P2P
+    sendP2P({ type: 'rematch' });
+
+    // Avisar a la pantalla por Socket
+    if (currentRoomId) {
+        socket.emit('game-event', { roomId: currentRoomId, event: 'rematch' });
+    }
+
+    // Reiniciar localmente
+    resetGame();
 }
 
 function initEndScene(theme) {
