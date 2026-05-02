@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cetro Mágico - Voz y Táctil</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #000000;
+            color: #ffffff;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .glow-overlay {
+            position: absolute;
+            top: -450px;
+            left: 50%;
+            transform: translate3d(-50%, 0, 0);
+            width: 200%;
+            height: 900px;
+            /* Default to violet, overridden via JS */
+            background: radial-gradient(circle at center, rgba(147, 51, 234, 0.9) 0%, rgba(147, 51, 234, 0.2) 50%, transparent 75%);
+            filter: blur(120px);
+            opacity: 0;
+            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1), transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            z-index: 0;
+            will-change: transform, opacity;
+        }
+
+        .is-illuminated .glow-overlay {
+            opacity: 1;
+            transform: translate3d(-50%, 60px, 0);
+        }
+
+        #mic-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            pointer-events: none;
+            z-index: 10;
+            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.5s ease;
+            opacity: 0;
+            visibility: hidden;
+            text-align: center;
+        }
+
+        #mic-label {
+            font-size: 2rem;
+            font-weight: 300;
+            letter-spacing: 0.1em;
+            color: rgba(255, 255, 255, 0.8);
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+        }
+
+        #mic-status.error {
+            opacity: 1;
+            visibility: visible;
+            color: #f87171;
+        }
+
+        #mic-status.heard {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .btn-spell {
+            transition: transform 0.1s ease, box-shadow 0.3s ease;
+        }
+
+        .btn-spell:active {
+            transform: scale(0.9);
+        }
+
+        #conn-error {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(239, 68, 68, 0.8);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 100;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        #health-bar-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            z-index: 1000;
+        }
+
+        #health-bar {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to right, #22c55e, #16a34a);
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen bg-black" onclick="handleScreenTap(event)">
+
+    <div id="conn-error">Sin conexión al Santuario</div>
+
+    <!-- Glow Effect -->
+    <div id="glow" class="glow-overlay"></div>
+
+    <!-- Voice Feedback -->
+    <div id="mic-status">
+        <span id="mic-label"></span>
+    </div>
+
+    <div id="health-bar-container">
+        <div id="health-bar"></div>
+    </div>
+
+
+
+    <!-- Spell Buttons -->
+    <div class="fixed bottom-10 w-full flex justify-center gap-8 z-50 px-6">
+        <button onclick="triggerSpell('expelliarmus', event)"
+            class="btn-spell w-14 h-14 rounded-full bg-purple-600 border-2 border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.5)]"></button>
+        <button onclick="triggerSpell('accio', event)"
+            class="btn-spell w-14 h-14 rounded-full bg-white border-2 border-gray-300 shadow-[0_0_15px_rgba(255,255,255,0.5)]"></button>
+        <button onclick="triggerSpell('desmaius', event)"
+            class="btn-spell w-14 h-14 rounded-full bg-red-600 border-2 border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.5)]"></button>
+        <button onclick="triggerSpell('protego', event)"
+            class="btn-spell w-14 h-14 rounded-full bg-cyan-500 border-2 border-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.5)]"></button>
+    </div>
+
+    <script>
+        let illuminated = false;
+        let spellTimeout;
+        let lastTriggerTime = 0;
+        let health = 100;
+        let isProtected = false;
+        let isDisarmed = false;
+        let protectionTimeout;
+        let disarmTimeout;
+
+        let recognition;
+        let spellCooldown = false;
+        let recognitionRunning = false;
+
+        // Socket.io Setup
+        let socket;
+        const connError = document.getElementById('conn-error');
+
+        if (typeof io !== 'undefined') {
+            socket = io();
+            socket.on('connect', () => { connError.style.opacity = '0'; });
+            socket.on('disconnect', () => { connError.style.opacity = '1'; });
+            socket.on('connect_error', () => { connError.style.opacity = '1'; });
+
+            // Listen for attacks to lose health (with 800ms impact delay)
+            socket.on('recibir-ataque', (data) => {
+                // Ignore defensive spells for damage
+                if (data.tipo === 'protego') return;
+
+                // If the attacker is NOT me, I might take damage/effects after the travel time
+                if (data.jugador !== 1) {
+                    setTimeout(() => {
+                        if (isProtected) {
+                            setMicStatus('heard', 'Protegido!');
+                            if (window.navigator.vibrate) window.navigator.vibrate(30);
+                            return;
+                        }
+
+                        // Damage calculation based on spell type
+                        let damage = 10; // Default (Expelliarmus / Others)
+                        if (data.tipo === 'desmaius') damage = 25;
+                        if (data.tipo === 'accio') damage = 5;
+
+                        health = Math.max(0, health - damage);
+                        document.getElementById('health-bar').style.width = health + '%';
+
+                        // Disarm effect for Expelliarmus
+                        if (data.tipo === 'expelliarmus') {
+                            isDisarmed = true;
+                            setMicStatus('heard', 'DESARMADO!');
+                            if (disarmTimeout) clearTimeout(disarmTimeout);
+                            disarmTimeout = setTimeout(() => {
+                                isDisarmed = false;
+                                setMicStatus('', '');
+                            }, 3000);
+                        }
+
+                        // Critical health effect
+                        if (health < 30) {
+                            document.getElementById('health-bar').style.background = '#ef4444';
+                        }
+
+                        // Haptic feedback for hit
+                        if (window.navigator.vibrate) {
+                            window.navigator.vibrate(data.tipo === 'desmaius' ? [200, 100, 200] : [100, 50, 100]);
+                        }
+                    }, 800);
+                }
+            });
+        } else {
+            connError.innerText = 'Error cargando Socket.io';
+            connError.style.opacity = '1';
+        }
+
+        const spellColors = {
+            'expelliarmus': 'radial-gradient(circle at center, rgba(168, 85, 247, 0.9) 0%, rgba(126, 34, 206, 0.3) 50%, transparent 75%)', // Violet
+            'accio': 'radial-gradient(circle at center, rgba(255, 255, 255, 0.9) 0%, rgba(200, 200, 200, 0.3) 50%, transparent 75%)', // White
+            'desmaius': 'radial-gradient(circle at center, rgba(239, 68, 68, 0.9) 0%, rgba(185, 28, 28, 0.3) 50%, transparent 75%)',  // Red
+            'protego': 'radial-gradient(circle at center, rgba(6, 182, 212, 0.9) 0%, rgba(8, 145, 178, 0.3) 50%, transparent 75%)'   // Cyan
+        };
+
+        function setMicStatus(state, text) {
+            const el = document.getElementById('mic-status');
+            const label = document.getElementById('mic-label');
+            el.className = state;
+            label.textContent = text;
+        }
+
+        function handleScreenTap(event) {
+            // Ignore if clicked on a button
+            if (event.target.tagName.toLowerCase() === 'button') return;
+
+            if (!recognitionRunning) {
+                startVoiceRecognition();
+            }
+        }
+
+        function triggerSpell(tipo, event) {
+            if (isDisarmed) {
+                setMicStatus('heard', 'ESTAS DESARMADO!');
+                return;
+            }
+
+            if (spellCooldown) return;
+            spellCooldown = true;
+            setTimeout(() => spellCooldown = false, 1500);
+
+            const now = Date.now();
+            if (now - lastTriggerTime < 1000) return;
+            lastTriggerTime = now;
+
+            if (event) event.stopPropagation();
+
+            // Emit to PC immediately (Highest Priority)
+            if (socket) {
+                socket.emit('hechizo', { tipo: tipo, jugador: 1, potencia: 100, timestamp: now });
+            }
+
+            if (tipo === 'protego') {
+                isProtected = true;
+                if (protectionTimeout) clearTimeout(protectionTimeout);
+                protectionTimeout = setTimeout(() => {
+                    isProtected = false;
+                }, 1500);
+            }
+
+            if (window.navigator.vibrate) {
+                window.navigator.vibrate(50);
+            }
+
+            // Visual Feedback on Mobile
+            const glow = document.getElementById('glow');
+            glow.style.background = spellColors[tipo];
+
+            document.body.classList.add('is-illuminated');
+            illuminated = true;
+
+            setMicStatus('heard', tipo.charAt(0).toUpperCase() + tipo.slice(1));
+
+            if (spellTimeout) clearTimeout(spellTimeout);
+
+            spellTimeout = setTimeout(() => {
+                document.body.classList.remove('is-illuminated');
+                illuminated = false;
+                spellTimeout = null;
+                setMicStatus('', '');
+            }, 800);
+        }
+
+        function startVoiceRecognition() {
+            if (recognitionRunning) return;
+
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                setMicStatus('error', 'Reconocimiento no soportado');
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onresult = (event) => {
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (spellCooldown) break;
+
+                    const transcript = event.results[i][0].transcript.trim().toLowerCase();
+
+                    if (event.results[i].isFinal) {
+                        // Solo disparar hechizos en resultados finales (evita doble disparo)
+                        if (transcript.includes('expelli') || transcript.includes('peli') || transcript.includes('pele') || transcript.includes('expoli') || transcript.includes('exfoli') || transcript.includes('expedi') || transcript.includes('expira') || transcript.includes('explorer') || transcript.includes('palermo')) {
+                            triggerSpell('expelliarmus');
+                        } else if (transcript.includes('accio')) {
+                            triggerSpell('accio');
+                        } else if (transcript.includes('desmai') || transcript.includes('desmay') || transcript.includes('de mayo') || transcript.includes('mayo')) {
+                            triggerSpell('desmaius');
+                        } else if (transcript.includes('proteg') || transcript.includes('protej') || transcript.includes('proteo') || transcript.includes('potato') || transcript.includes('trago') || transcript.includes('prego') || transcript.includes('pro') || transcript.includes('proto') || transcript.includes('tego')) {
+                            triggerSpell('protego');
+                        } else {
+                            setMicStatus('heard', transcript);
+                            setTimeout(() => { if (!illuminated) setMicStatus('', ''); }, 1500);
+                        }
+                    } else {
+                        // Resultados parciales: solo mostrar, nunca disparar
+                        setMicStatus('heard', transcript);
+                    }
+                }
+            };
+
+            recognition.onerror = (err) => {
+                console.error('Speech Recognition Error:', err);
+                if (err.error === 'not-allowed') {
+                    setMicStatus('error', 'Microfono bloqueado');
+                }
+            };
+
+            recognition.onend = () => {
+                // Auto-restart si se corta (pasa seguido en móvil)
+                if (recognitionRunning) recognition.start();
+            };
+
+            recognitionRunning = true;
+            recognition.start();
+        }
+    </script>
+</body>
+
+</html>

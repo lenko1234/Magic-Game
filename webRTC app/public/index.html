@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Magic WebRTC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #000000;
+            color: #ffffff;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* ---- LOBBY ---- */
+        #lobby {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            background: #0a0a0a;
+        }
+
+        /* ---- COMBAT ---- */
+        #combat {
+            display: none;
+            position: relative;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .glow-overlay {
+            position: absolute;
+            top: -450px;
+            left: 50%;
+            transform: translate3d(-50%, 0, 0);
+            width: 200%;
+            height: 900px;
+            background: radial-gradient(circle at center, rgba(147, 51, 234, 0.9) 0%, rgba(147, 51, 234, 0.2) 50%, transparent 75%);
+            filter: blur(120px);
+            opacity: 0;
+            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1), transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        #combat.is-illuminated .glow-overlay {
+            opacity: 1;
+            transform: translate3d(-50%, 60px, 0);
+        }
+
+        #spell-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            pointer-events: none;
+            z-index: 10;
+            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 0;
+            text-align: center;
+        }
+        #spell-label {
+            font-size: 2rem;
+            font-weight: 300;
+            letter-spacing: 0.1em;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        #spell-status.visible { opacity: 1; }
+
+        .btn-spell { transition: transform 0.1s ease; }
+        .btn-spell:active { transform: scale(0.9); }
+
+        #health-bar-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+        #health-bar {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to right, #22c55e, #16a34a);
+            transition: width 0.3s ease;
+        }
+
+        #connection-status {
+            position: fixed;
+            top: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.2);
+            z-index: 100;
+            letter-spacing: 0.05em;
+        }
+    </style>
+</head>
+
+<!-- ================================================================ -->
+<!--  LOBBY                                                             -->
+<!-- ================================================================ -->
+<body onclick="handleBodyTap()">
+
+<div id="lobby">
+
+    <!-- MAIN MENU -->
+    <div id="main-view" class="max-w-md w-full space-y-8 text-center">
+        <div>
+            <h1 class="text-4xl font-bold tracking-tighter text-purple-400">MAGIC</h1>
+            <p class="text-slate-500 text-sm mt-1">Duelo de magos P2P</p>
+        </div>
+        <div class="space-y-4 pt-4">
+            <button id="btnCreate" class="w-full py-4 bg-purple-600 hover:bg-purple-500 rounded-2xl font-bold text-xl transition-all active:scale-95 shadow-lg shadow-purple-500/20">
+                ⚔️ CREAR DUELO
+            </button>
+            <button id="btnJoin" class="w-full py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold text-xl transition-all active:scale-95 border border-slate-700">
+                📷 UNIRSE A DUELO
+            </button>
+        </div>
+    </div>
+
+    <!-- MAGO 1: QR -->
+    <div id="mago1-view" class="hidden max-w-md w-full space-y-6 text-center">
+        <h2 class="text-2xl font-bold text-purple-400">ESPERANDO AL RIVAL</h2>
+        <div class="bg-white p-4 rounded-3xl inline-block shadow-2xl">
+            <div id="qr-canvas"></div>
+        </div>
+        <p class="text-slate-400 text-sm">Escaneá este código con el otro teléfono.</p>
+        <p id="room-id-display" class="font-mono text-lg text-purple-300"></p>
+        <div id="lobby-status" class="text-slate-500 text-sm animate-pulse">Conectando al servidor...</div>
+        <button onclick="location.reload()" class="text-slate-600 underline text-sm">Cancelar</button>
+    </div>
+
+    <!-- MAGO 2: SCANNER -->
+    <div id="mago2-view" class="hidden max-w-md w-full space-y-6 text-center">
+        <h2 class="text-2xl font-bold text-purple-400">ESCANEANDO RIVAL</h2>
+        <div id="reader" class="rounded-3xl overflow-hidden border-2 border-purple-500 shadow-2xl"></div>
+        <p class="text-slate-400 text-sm">Apuntá al código QR del otro mago.</p>
+        <button onclick="stopScanner()" class="text-slate-600 underline text-sm">Cancelar</button>
+    </div>
+
+</div>
+
+<!-- ================================================================ -->
+<!--  COMBAT                                                            -->
+<!-- ================================================================ -->
+<div id="combat">
+    <div id="connection-status">P2P</div>
+    <div id="glow" class="glow-overlay"></div>
+
+    <div id="spell-status">
+        <span id="spell-label"></span>
+    </div>
+
+    <div id="health-bar-container">
+        <div id="health-bar"></div>
+    </div>
+
+    <div class="fixed bottom-10 w-full flex justify-center gap-8 z-50 px-6">
+        <button onclick="triggerSpell('expelliarmus', event)" class="btn-spell w-16 h-16 rounded-full bg-purple-600 border-2 border-purple-400 shadow-lg shadow-purple-500/30"></button>
+        <button onclick="triggerSpell('accio', event)"        class="btn-spell w-16 h-16 rounded-full bg-white border-2 border-gray-300 shadow-lg"></button>
+        <button onclick="triggerSpell('desmaius', event)"     class="btn-spell w-16 h-16 rounded-full bg-red-600 border-2 border-red-400 shadow-lg shadow-red-500/30"></button>
+        <button onclick="triggerSpell('protego', event)"      class="btn-spell w-16 h-16 rounded-full bg-cyan-500 border-2 border-cyan-300 shadow-lg shadow-cyan-500/30"></button>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!--  SCRIPTS                                                           -->
+<!-- ================================================================ -->
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+
+// ----------------------------------------------------------------
+// ESTADO GLOBAL
+// ----------------------------------------------------------------
+let playerNum = null;        // 1 = Host, 2 = Client
+let currentRoomId = null;
+let isHost = false;
+
+let health = 100;
+let isProtected = false;
+let isDisarmed = false;
+let spellCooldown = false;
+let isInClash = false;
+let recognitionRunning = false;
+let recognition;
+let motionHandler = null;
+let motionDebugInterval = null;
+let lastMotionValue = 0;
+
+// Clash detection: guardamos el hechizo propio para comparar con el del rival
+let pendingMySpell = null;  // { tipo, timestamp }
+const CLASH_WINDOW_MS = 2000; // si ambos tiran dentro de 2s → choque
+
+// ----------------------------------------------------------------
+// SOCKET (solo para señalización - no pasa datos de juego)
+// ----------------------------------------------------------------
+const socket = io();
+
+// ----------------------------------------------------------------
+// AUDIO ENGINE (copiado del legacy)
+// ----------------------------------------------------------------
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let sounds = {};
+
+async function loadSound(name, url) {
+    try {
+        const response = await fetch(url);
+        const arrayBuffer = await response.arrayBuffer();
+        sounds[name] = await audioCtx.decodeAudioData(arrayBuffer);
+    } catch (e) { console.warn(`Sound ${name} no cargado:`, e); }
+}
+
+loadSound('expelliarmus', 'sounds/expelliarmus.wav');
+loadSound('desmaius',     'sounds/desmaius.wav');
+loadSound('protego',      'sounds/protego.wav');
+loadSound('accio',        'sounds/accio.wav');
+
+function playSound(tipo, isMine) {
+    if (!sounds[tipo]) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = sounds[tipo];
+
+    const gainNode = audioCtx.createGain();
+
+    if (tipo === 'protego') {
+        gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+    } else {
+        const travelDuration = 0.8;
+        const curveLength = 100;
+        const curve = new Float32Array(curveLength);
+        for (let i = 0; i < curveLength; i++) {
+            const x = i / (curveLength - 1);
+            const sigmoid = 1 / (1 + Math.exp(-12 * (x - 0.5)));
+            // Si es mío, el sonido se ALEJA (baja volumen). Si es del rival, el sonido SE ACERCA (sube volumen).
+            curve[i] = isMine ? (1 - Math.max(0, sigmoid)) : Math.max(0, sigmoid);
+        }
+        curve[0] = isMine ? 1 : 0;
+        curve[curveLength - 1] = isMine ? 0 : 1;
+        gainNode.gain.setValueCurveAtTime(curve, audioCtx.currentTime, travelDuration);
+    }
+
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    // Aumentar velocidad para Expelliarmus
+    if (tipo === 'expelliarmus') {
+        source.playbackRate.value = 1.4;
+    }
+
+    // Mantenemos la limpieza para que no se corte el audio tras varios hechizos
+    source.onended = () => {
+        source.disconnect();
+        gainNode.disconnect();
+    };
+
+    const offset = (tipo === 'protego') ? 0.25 : 0;
+    source.start(audioCtx.currentTime, offset);
+}
+
+// ----------------------------------------------------------------
+// VISUAL FEEDBACK (copiado del legacy)
+// ----------------------------------------------------------------
+const spellColors = {
+    'expelliarmus': 'radial-gradient(circle at center, rgba(168, 85, 247, 0.9) 0%, rgba(126, 34, 206, 0.3) 50%, transparent 75%)',
+    'accio':        'radial-gradient(circle at center, rgba(255, 255, 255, 0.9) 0%, rgba(200, 200, 200, 0.3) 50%, transparent 75%)',
+    'desmaius':     'radial-gradient(circle at center, rgba(239, 68, 68, 0.9) 0%, rgba(185, 28, 28, 0.3) 50%, transparent 75%)',
+    'protego':      'radial-gradient(circle at center, rgba(6, 182, 212, 0.9) 0%, rgba(8, 145, 178, 0.3) 50%, transparent 75%)'
+};
+
+function showVisualFeedback(tipo) {
+    const glow = document.getElementById('glow');
+    glow.style.background = spellColors[tipo];
+    document.getElementById('combat').classList.add('is-illuminated');
+    setSpellStatus(tipo.toUpperCase());
+    
+    const duration = (tipo === 'protego') ? 1500 : 800;
+    
+    setTimeout(() => {
+        document.getElementById('combat').classList.remove('is-illuminated');
+        setSpellStatus('');
+    }, duration);
+}
+
+function setSpellStatus(text) {
+    const el = document.getElementById('spell-status');
+    document.getElementById('spell-label').textContent = text;
+    el.className = text ? 'visible' : '';
+}
+
+function showClashGlow() {
+    const glow = document.getElementById('glow');
+    glow.style.background = 'radial-gradient(circle at center, rgba(255, 200, 50, 0.9) 0%, rgba(255, 100, 0, 0.3) 50%, transparent 75%)';
+    document.getElementById('combat').classList.add('is-illuminated');
+}
+
+// ----------------------------------------------------------------
+// LÓGICA DE COMBATE
+// ----------------------------------------------------------------
+function applyDamage(tipo) {
+    let damage = 10;
+    if (tipo === 'desmaius') damage = 25;
+    if (tipo === 'accio')    damage = 5;
+
+    health = Math.max(0, health - damage);
+    document.getElementById('health-bar').style.width = health + '%';
+    if (health < 30) document.getElementById('health-bar').style.background = '#ef4444';
+    if (window.navigator.vibrate) window.navigator.vibrate(100);
+}
+
+function receiveAttack(data) {
+    console.log("⚡ Hechizo recibido del rival:", data.tipo);
+    // data = { tipo, jugador }
+    const isMe = data.jugador === playerNum;
+    if (isMe) return; // no procesamos nuestros propios hechizos
+    if (data.tipo === 'protego') return;
+
+    // ¿Choque? Solo el Host decide (para evitar doble procesamiento)
+    if (isHost && pendingMySpell && !isInClash) {
+        const elapsed = Date.now() - pendingMySpell.timestamp;
+        if (elapsed < CLASH_WINDOW_MS) {
+            console.log(`⚡ CHOQUE detectado! (${elapsed}ms) ${pendingMySpell.tipo} vs ${data.tipo}`);
+            pendingMySpell = null;
+            // Arrancar choque en ambos lados
+            startClash();
+            sendP2P({ type: 'clash-start' });
+            if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'clash-start' });
+            return;
+        }
+    }
+
+    playSound(data.tipo, false);
+    const impactDelay = (data.tipo === 'expelliarmus') ? 600 : 800;
+
+    setTimeout(() => {
+        if (isProtected) { setSpellStatus('¡Protegido!'); return; }
+        applyDamage(data.tipo);
+        if (data.tipo === 'expelliarmus') {
+            isDisarmed = true;
+            setSpellStatus('¡DESARMADO!');
+            setTimeout(() => { isDisarmed = false; setSpellStatus(''); }, 3000);
+        }
+    }, impactDelay);
+}
+
+function triggerSpell(tipo, event) {
+    if (isDisarmed || spellCooldown || isInClash) return;
+    if (event) event.stopPropagation();
+
+    spellCooldown = true;
+    setTimeout(() => spellCooldown = false, 1500);
+
+    const msg = { type: 'spell', tipo, jugador: playerNum };
+
+    // Guardar nuestro hechizo para detección de choque
+    pendingMySpell = { tipo, timestamp: Date.now() };
+    setTimeout(() => { pendingMySpell = null; }, CLASH_WINDOW_MS);
+
+    // Feedback local inmediato
+    showVisualFeedback(tipo);
+    playSound(tipo, true);
+
+    if (tipo === 'protego') {
+        isProtected = true;
+        setTimeout(() => isProtected = false, 1500);
+    }
+
+    // Enviar al rival por DataChannel
+    sendP2P(msg);
+
+    // Relay a la pantalla/proyector via Socket.io
+    if (currentRoomId) {
+        socket.emit('game-event', { roomId: currentRoomId, event: 'spell', tipo, jugador: playerNum });
+    }
+}
+
+// ----------------------------------------------------------------
+// CLASH MECHANIC (copiado del legacy)
+// ----------------------------------------------------------------
+function startClash() {
+    isInClash = true;
+    spellCooldown = true;
+    setSpellStatus('⚡ ¡MANTÉ FIRME! ⚡');
+    showClashGlow();
+    attachMotionHandler();
+
+    // Solo el Host maneja el temporizador del choque
+    if (isHost) {
+        setTimeout(() => {
+            // Decidir ganador al azar o por inestabilidad acumulada
+            const loser = Math.random() > 0.5 ? 1 : 2;
+            const endMsg = { type: 'clash-end', loser, damage: 30 };
+            
+            // Avisar al cliente
+            sendP2P(endMsg);
+            // Avisar a la pantalla
+            socket.emit('game-event', { roomId: currentRoomId, event: 'clash-end', loser, damage: 30 });
+            // Procesar localmente
+            endClash(endMsg);
+        }, 8000); // 8 segundos de choque
+    }
+
+    motionDebugInterval = setInterval(() => {
+        if (isInClash) setSpellStatus(`⚡ FIRME ⚡  mov: ${lastMotionValue.toFixed(1)}`);
+    }, 150);
+}
+
+function endClash(data) {
+    isInClash = false;
+    spellCooldown = false;
+    stopClashMotion();
+    document.getElementById('combat').classList.remove('is-illuminated');
+
+    if (data.loser === playerNum) {
+        applyDamage('desmaius');
+        setSpellStatus(`¡PERDISTE EL CHOQUE! -${data.damage}`);
+        if (window.navigator.vibrate) window.navigator.vibrate([300, 100, 300]);
+    } else {
+        setSpellStatus('✨ ¡GANASTE EL CHOQUE!');
+    }
+    setTimeout(() => setSpellStatus(''), 2500);
+}
+
+function attachMotionHandler() {
+    motionHandler = (e) => {
+        if (!isInClash) return;
+        const rawAcc = e.acceleration;
+        const acc = (rawAcc && rawAcc.x !== null) ? rawAcc : e.accelerationIncludingGravity;
+        if (!acc) return;
+        const valor = Math.abs(acc.x || 0) + Math.abs(acc.y || 0) + Math.abs(acc.z || 0);
+        lastMotionValue = valor;
+        if (valor > 0.5) {
+            sendP2P({ type: 'motion', jugador: playerNum, valor });
+            if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'motion', jugador: playerNum, valor });
+            if (valor > 5 && window.navigator.vibrate) window.navigator.vibrate(30);
+        }
+    };
+    window.addEventListener('devicemotion', motionHandler);
+}
+
+function stopClashMotion() {
+    if (motionHandler) { window.removeEventListener('devicemotion', motionHandler); motionHandler = null; }
+    if (motionDebugInterval) { clearInterval(motionDebugInterval); motionDebugInterval = null; }
+}
+
+// ----------------------------------------------------------------
+// VOICE RECOGNITION (copiado del legacy)
+// ----------------------------------------------------------------
+function startVoiceRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (spellCooldown) break;
+            const transcript = event.results[i][0].transcript.trim().toLowerCase();
+            if (event.results[i].isFinal) {
+                if      (transcript.includes('expelli') || transcript.includes('peli') || transcript.includes('expoli') || transcript.includes('palermo')) triggerSpell('expelliarmus');
+                else if (transcript.includes('accio'))                                                                                                      triggerSpell('accio');
+                else if (transcript.includes('desmai') || transcript.includes('desmay') || transcript.includes('mayo'))                                     triggerSpell('desmaius');
+                else if (transcript.includes('proteg') || transcript.includes('potato') || transcript.includes('prego') || transcript.includes('tego'))     triggerSpell('protego');
+            } else {
+                setSpellStatus(transcript);
+            }
+        }
+    };
+
+    recognition.onend = () => { if (recognitionRunning) recognition.start(); };
+    recognitionRunning = true;
+    recognition.start();
+}
+
+// ----------------------------------------------------------------
+// MANEJO DE MENSAJES P2P ENTRANTES
+// ----------------------------------------------------------------
+function handleP2PMessage(msg) {
+    switch (msg.type) {
+        case 'spell':
+            receiveAttack(msg);
+            break;
+        case 'motion':
+            // Solo el host arbitra el choque
+            if (isHost) handleMotionFromRival(msg.valor);
+            break;
+        case 'clash-start':
+            startClash();
+            if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'clash-start' });
+            break;
+        case 'clash-end':
+            endClash(msg);
+            if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'clash-end', loser: msg.loser, damage: msg.damage });
+            break;
+        case 'health-sync':
+            // El host envía al cliente su vida actualizada
+            if (!isHost) {
+                health = msg.health;
+                document.getElementById('health-bar').style.width = health + '%';
+            }
+            break;
+    }
+}
+
+// Lógica de árbitro de choque (solo corre en el Host)
+let rivalMotionBuffer = [];
+let myMotionBuffer = [];
+
+function handleMotionFromRival(valor) {
+    rivalMotionBuffer.push(valor);
+    if (rivalMotionBuffer.length > 20) rivalMotionBuffer.shift();
+}
+
+// ----------------------------------------------------------------
+// WEBRTC
+// ----------------------------------------------------------------
+let peerConnection;
+let dataChannel;
+const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+function createPeerConnection() {
+    peerConnection = new RTCPeerConnection(rtcConfig);
+
+    peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+            socket.emit('signal', { roomId: currentRoomId, signalData: { candidate: event.candidate } });
+        }
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+        console.log('P2P State:', peerConnection.connectionState);
+        if (peerConnection.connectionState === 'connected') enterCombat();
+        if (peerConnection.connectionState === 'disconnected') setSpellStatus('Rival desconectado');
+    };
+}
+
+function setupDataChannel(channel) {
+    dataChannel = channel;
+    dataChannel.onopen    = () => console.log('DataChannel abierto!');
+    dataChannel.onmessage = (event) => handleP2PMessage(JSON.parse(event.data));
+}
+
+function sendP2P(obj) {
+    if (dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify(obj));
+    }
+}
+
+// HOST: espera que se una alguien y lanza la oferta
+socket.on('user-joined', async () => {
+    console.log('Rival detectado → iniciando WebRTC como HOST');
+    isHost = true;
+    playerNum = 1;
+    createPeerConnection();
+
+    dataChannel = peerConnection.createDataChannel('magic-duel');
+    setupDataChannel(dataChannel);
+
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    socket.emit('signal', { roomId: currentRoomId, signalData: { offer } });
+    setLobbyStatus('Rival encontrado, conectando...');
+});
+
+// CLIENTE: recibe y responde señales
+socket.on('signal', async (data) => {
+    const { signalData } = data;
+    if (!peerConnection) {
+        isHost = false;
+        playerNum = 2;
+        createPeerConnection();
+        peerConnection.ondatachannel = (event) => setupDataChannel(event.channel);
+    }
+
+    if (signalData.offer) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('signal', { roomId: currentRoomId, signalData: { answer } });
+    } else if (signalData.answer) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.answer));
+    } else if (signalData.candidate) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+    }
+});
+
+// ----------------------------------------------------------------
+// TRANSICIÓN LOBBY → COMBATE
+// ----------------------------------------------------------------
+function enterCombat() {
+    document.getElementById('lobby').style.display = 'none';
+    document.getElementById('combat').style.display = 'block';
+    document.getElementById('connection-status').textContent = `Mago ${playerNum} | P2P ✓`;
+    startVoiceRecognition();
+}
+
+function handleBodyTap() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission().catch(() => {});
+    }
+}
+
+// ----------------------------------------------------------------
+// LOBBY UI
+// ----------------------------------------------------------------
+const mainView  = document.getElementById('main-view');
+const mago1View = document.getElementById('mago1-view');
+const mago2View = document.getElementById('mago2-view');
+let html5QrCode;
+
+function setLobbyStatus(text) {
+    const el = document.getElementById('lobby-status');
+    if (el) el.textContent = text;
+}
+
+document.getElementById('btnCreate').onclick = () => {
+    currentRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    mainView.classList.add('hidden');
+    mago1View.classList.remove('hidden');
+    document.getElementById('room-id-display').textContent = `SALA: ${currentRoomId}`;
+
+    socket.emit('join-room', currentRoomId);
+    setLobbyStatus('Conectado. Esperando rival...');
+
+    document.getElementById('qr-canvas').innerHTML = '';
+    new QRCode(document.getElementById('qr-canvas'), {
+        text: `${window.location.origin}/?room=${currentRoomId}`,
+        width: 256,
+        height: 256,
+        colorDark: '#000000',
+        colorLight: '#FFFFFF'
+    });
+};
+
+document.getElementById('btnJoin').onclick = () => {
+    mainView.classList.add('hidden');
+    mago2View.classList.remove('hidden');
+
+    html5QrCode = new Html5Qrcode('reader');
+    html5QrCode.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 250 } }, (decoded) => {
+        stopScanner();
+        joinRoom(decoded.includes('?room=') ? new URL(decoded).searchParams.get('room') : decoded);
+    });
+};
+
+function stopScanner() {
+    if (html5QrCode) html5QrCode.stop().catch(() => {});
+}
+
+function joinRoom(roomId) {
+    currentRoomId = roomId;
+    playerNum = 2;
+    socket.emit('join-room', roomId);
+    mago2View.innerHTML = `
+        <h2 class="text-2xl font-bold text-green-400">¡SALA ENCONTRADA!</h2>
+        <p class="text-slate-400 mt-4 animate-pulse">Estableciendo conexión P2P...</p>
+        <p class="font-mono text-purple-300 mt-2">SALA: ${roomId}</p>
+    `;
+}
+
+// (sin listeners de game-event en el celu - la lógica vive en el P2P)
+
+// Auto-unirse si viene de un QR
+const roomFromUrl = new URLSearchParams(window.location.search).get('room');
+if (roomFromUrl) joinRoom(roomFromUrl);
+
+</script>
+</body>
+</html>

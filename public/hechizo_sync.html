@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Santuario (Experimental Sync) - PC</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; }
+        #canvas-container { width: 100vw; height: 100vh; }
+    </style>
+</head>
+
+<body>
+    <div id="canvas-container"></div>
+
+    <script>
+        let scene, camera, renderer, clock;
+        let spells = [];
+        let particles = [];
+        let isColliding = false;
+        let collisionTimer = 0;
+        let collisionColorRight = 0x00f2ff;
+        let collisionColorLeft = 0xff3300;
+        const COLLISION_DURATION = 10;
+
+        let socket = io();
+        let serverOffset = 0;
+
+        // --- Clock Sync ---
+        function syncClock() {
+            const t1 = Date.now();
+            socket.emit('ping_sync', { t1 });
+        }
+
+        socket.on('pong_sync', ({ t1, serverTime }) => {
+            const latency = (Date.now() - t1) / 2;
+            serverOffset = serverTime + latency - Date.now();
+        });
+
+        function getServerTime() {
+            return Date.now() + serverOffset;
+        }
+
+        syncClock();
+        setInterval(syncClock, 10000);
+
+        // --- Three.js Logic (from original hechizo.html) ---
+        class Spell {
+            constructor(direction, type = 'default') {
+                this.direction = direction;
+                this.speed = 200;
+                this.alive = true;
+                this.isStopped = false;
+                this.color = 0xffffff;
+
+                if (type === 'expelliarmus') this.color = 0xbf40ff;
+                else if (type === 'desmaius') this.color = 0xff0000;
+                else if (type === 'protego') this.color = 0x00ffff;
+
+                this.group = new THREE.Group();
+                this.segments = 40;
+                this.length = 90;
+                this.points = [];
+
+                for (let i = 0; i <= this.segments; i++) {
+                    this.points.push(new THREE.Vector3(i * (this.length / this.segments) - (this.length / 2), 0, 0));
+                }
+
+                this.curve = new THREE.CatmullRomCurve3(this.points);
+                this.core = new THREE.Mesh(new THREE.TubeGeometry(this.curve, this.segments, 0.05, 8, false), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                this.aura = new THREE.Mesh(new THREE.TubeGeometry(this.curve, this.segments, 0.3, 8, false), new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending }));
+                
+                this.group.add(this.core);
+                this.group.add(this.aura);
+                this.group.position.x = direction > 0 ? -40 : 40;
+                scene.add(this.group);
+            }
+
+            update(delta) {
+                if (!this.isStopped) this.group.position.x += this.direction * this.speed * delta;
+                if (Math.abs(this.group.position.x) > 80) this.destroy();
+            }
+
+            destroy() {
+                scene.remove(this.group);
+                this.alive = false;
+            }
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 25;
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+            clock = new THREE.Clock();
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            spells.forEach((s, index) => {
+                s.update(delta);
+                if (!s.alive) spells.splice(index, 1);
+            });
+            renderer.render(scene, camera);
+        }
+
+        // --- Synchronized Spell Spawning ---
+        socket.on('recibir-ataque', (data) => {
+            const delay = data.playAt - getServerTime();
+            const direction = (data.jugador === 1) ? 1 : -1;
+
+            setTimeout(() => {
+                spells.push(new Spell(direction, data.tipo));
+            }, Math.max(0, delay));
+        });
+
+        window.onload = init;
+    </script>
+</body>
+</html>

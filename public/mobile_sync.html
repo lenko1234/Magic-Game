@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cetro Mágico (Experimental Sync) - P1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #000000;
+            color: #ffffff;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .glow-overlay {
+            position: absolute;
+            top: -450px;
+            left: 50%;
+            transform: translate3d(-50%, 0, 0);
+            width: 200%;
+            height: 900px;
+            background: radial-gradient(circle at center, rgba(147, 51, 234, 0.9) 0%, rgba(147, 51, 234, 0.2) 50%, transparent 75%);
+            filter: blur(120px);
+            opacity: 0;
+            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1), transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .is-illuminated .glow-overlay {
+            opacity: 1;
+            transform: translate3d(-50%, 60px, 0);
+        }
+
+        #mic-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            pointer-events: none;
+            z-index: 10;
+            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 0;
+            text-align: center;
+        }
+
+        #mic-label {
+            font-size: 2rem;
+            font-weight: 300;
+            letter-spacing: 0.1em;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        #mic-status.heard { opacity: 1; }
+        #mic-status.error { opacity: 1; color: #f87171; }
+
+        .btn-spell { transition: transform 0.1s ease; }
+        .btn-spell:active { transform: scale(0.9); }
+
+        #health-bar-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        #health-bar {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to right, #22c55e, #16a34a);
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+
+<body class="min-h-screen w-full" onclick="handleScreenTap(event)">
+    <div id="glow" class="glow-overlay"></div>
+
+    <div id="mic-status">
+        <span id="mic-label"></span>
+    </div>
+
+    <div id="health-bar-container">
+        <div id="health-bar"></div>
+    </div>
+
+    <div class="fixed bottom-10 w-full flex justify-center gap-8 z-50 px-6">
+        <button onclick="triggerSpell('expelliarmus', event)" class="btn-spell w-14 h-14 rounded-full bg-purple-600 border-2 border-purple-400"></button>
+        <button onclick="triggerSpell('accio', event)" class="btn-spell w-14 h-14 rounded-full bg-white border-2 border-gray-300"></button>
+        <button onclick="triggerSpell('desmaius', event)" class="btn-spell w-14 h-14 rounded-full bg-red-600 border-2 border-red-400"></button>
+        <button onclick="triggerSpell('protego', event)" class="btn-spell w-14 h-14 rounded-full bg-cyan-500 border-2 border-cyan-300"></button>
+    </div>
+
+    <script>
+        const playerNum = 1;
+        let socket = io();
+        let serverOffset = 0;
+        let illuminated = false;
+        let health = 100;
+        let isProtected = false;
+        let isDisarmed = false;
+        let spellCooldown = false;
+        let recognitionRunning = false;
+        let recognition;
+        let isInClash = false;       // true while clash mechanic is active
+
+        // --- Audio Engine ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let sounds = {};
+
+        async function loadSound(name, url) {
+            try {
+                const response = await fetch(url);
+                const arrayBuffer = await response.arrayBuffer();
+                sounds[name] = await audioCtx.decodeAudioData(arrayBuffer);
+                console.log(`Sound loaded: ${name}`);
+            } catch (e) { console.error(`Error loading ${name}:`, e); }
+        }
+
+        loadSound('expelliarmus', 'sounds/expelliarmus.wav');
+        loadSound('desmaius', 'sounds/desmaius.wav');
+        loadSound('protego', 'sounds/protego.wav');
+        loadSound('accio', 'sounds/accio.wav');
+
+        function playSynchronizedSound(tipo, playAt, isAttacker) {
+            if (!sounds[tipo]) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            const delay = (playAt - getServerTime()) / 1000;
+            const startTime = audioCtx.currentTime + Math.max(0, delay);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = sounds[tipo];
+
+            const gainNode = audioCtx.createGain();
+            const duration = source.buffer.duration;
+
+            if (tipo === 'protego') {
+                // Hechizo local, volumen constante
+                gainNode.gain.setValueAtTime(1.0, startTime);
+            } else {
+                // Duración fija del VIAJE (ajustada a la animación visual, ej: 0.8s)
+                const travelDuration = 0.8;
+                const curveLength = 100;
+                const curve = new Float32Array(curveLength);
+                
+                for (let i = 0; i < curveLength; i++) {
+                    const x = i / (curveLength - 1);
+                    const sigmoid = 1 / (1 + Math.exp(-12 * (x - 0.5)));
+                    curve[i] = isAttacker ? (1 - Math.max(0, sigmoid)) : Math.max(0, sigmoid);
+                }
+                
+                curve[0] = isAttacker ? 1 : 0;
+                curve[curveLength - 1] = isAttacker ? 0 : 1;
+
+                // Aplicar la curva solo durante el tiempo de vuelo
+                gainNode.gain.setValueCurveAtTime(curve, startTime, travelDuration);
+            }
+
+            source.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            const offset = (tipo === 'protego') ? 0.25 : 0;
+            source.start(startTime, offset);
+        }
+
+        // --- Clock Sync ---
+        function syncClock() {
+            const t1 = Date.now();
+            socket.emit('ping_sync', { t1 });
+        }
+
+        socket.on('pong_sync', ({ t1, serverTime }) => {
+            const latency = (Date.now() - t1) / 2;
+            serverOffset = serverTime + latency - Date.now();
+            console.log(`Clock Synced. Offset: ${serverOffset}ms, Latency: ${latency}ms`);
+        });
+
+        function getServerTime() {
+            return Date.now() + serverOffset;
+        }
+
+        setInterval(syncClock, 10000); // Re-sync every 10s
+        syncClock();
+
+        // --- Game Logic ---
+        socket.on('recibir-ataque', (data) => {
+            const isMe = data.jugador === playerNum;
+            
+            // 1. Audio Sincronizado: Protego es solo local para quien lo tira
+            if (data.tipo === 'protego' && !isMe) return;
+            
+            playSynchronizedSound(data.tipo, data.playAt, isMe);
+
+            // 2. Lógica de Daño y Efectos (con delay de impacto visual)
+            if (data.tipo !== 'protego' && !isMe) {
+                const impactDelay = (data.playAt - getServerTime()) + 800; // 800ms travel time
+                setTimeout(() => {
+                    if (isProtected) {
+                        setMicStatus('heard', 'Protegido!');
+                        return;
+                    }
+                    
+                    let damage = 10;
+                    if (data.tipo === 'desmaius') damage = 25;
+                    if (data.tipo === 'accio') damage = 5;
+
+                    health = Math.max(0, health - damage);
+                    document.getElementById('health-bar').style.width = health + '%';
+
+                    if (data.tipo === 'expelliarmus') {
+                        isDisarmed = true;
+                        setMicStatus('heard', 'DESARMADO!');
+                        setTimeout(() => { isDisarmed = false; setMicStatus('', ''); }, 3000);
+                    }
+
+                    if (window.navigator.vibrate) window.navigator.vibrate(100);
+                }, Math.max(0, impactDelay));
+            }
+        });
+
+        // --- Clash Mechanic ---
+        socket.on('choque-iniciado', () => {
+            isInClash = true;
+            spellCooldown = true; // Disable spells during clash
+            setMicStatus('heard', '⚡ ¡MANTÉ FIRME! ⚡');
+
+            // Show clash glow (golden)
+            const glow = document.getElementById('glow');
+            glow.style.background = 'radial-gradient(circle at center, rgba(255, 200, 50, 0.9) 0%, rgba(255, 100, 0, 0.3) 50%, transparent 75%)';
+            document.body.classList.add('is-illuminated');
+
+            startClashMotion();
+        });
+
+        socket.on('choque-terminado', (data) => {
+            isInClash = false;
+            spellCooldown = false;
+            stopClashMotion();
+            document.body.classList.remove('is-illuminated');
+
+            if (data.loser === playerNum) {
+                health = Math.max(0, health - data.damage);
+                document.getElementById('health-bar').style.width = health + '%';
+                if (health < 30) document.getElementById('health-bar').style.background = '#ef4444';
+                setMicStatus('heard', `¡PERDISTE EL CHOQUE! -${data.damage}`);
+                if (window.navigator.vibrate) window.navigator.vibrate([300, 100, 300]);
+            } else {
+                setMicStatus('heard', '✨ ¡GANASTE EL CHOQUE!');
+            }
+            setTimeout(() => setMicStatus('', ''), 2500);
+        });
+
+        let motionHandler = null;
+        let motionDebugInterval = null;
+        let lastMotionValue = 0;
+
+        function startClashMotion() {
+            lastMotionValue = 0;
+            attachMotionHandler();
+
+            // Show live debug value on screen during clash
+            motionDebugInterval = setInterval(() => {
+                if (isInClash) {
+                    setMicStatus('heard', `⚡ FIRME ⚡  mov: ${lastMotionValue.toFixed(1)}`);
+                }
+            }, 150);
+        }
+
+        function attachMotionHandler() {
+            motionHandler = (e) => {
+                if (!isInClash) return;
+                // On Android, e.acceleration exists but has null properties → fall back to accelerationIncludingGravity
+                const rawAcc = e.acceleration;
+                const acc = (rawAcc && rawAcc.x !== null) ? rawAcc : e.accelerationIncludingGravity;
+                if (!acc) return;
+                const valor = Math.abs(acc.x || 0) + Math.abs(acc.y || 0) + Math.abs(acc.z || 0);
+                lastMotionValue = valor;
+                if (valor > 0.5) {
+                    socket.emit('inestabilidad', { jugador: playerNum, valor });
+                    if (valor > 5 && window.navigator.vibrate) window.navigator.vibrate(30);
+                }
+            };
+            window.addEventListener('devicemotion', motionHandler);
+            console.log('✅ devicemotion listener attached');
+        }
+
+        function stopClashMotion() {
+            if (motionHandler) {
+                window.removeEventListener('devicemotion', motionHandler);
+                motionHandler = null;
+            }
+            if (motionDebugInterval) {
+                clearInterval(motionDebugInterval);
+                motionDebugInterval = null;
+            }
+        }
+
+        function triggerSpell(tipo, event) {
+            if (isDisarmed || spellCooldown) return;
+            if (event) event.stopPropagation();
+
+            spellCooldown = true;
+            setTimeout(() => spellCooldown = false, 1500);
+
+            // Calcular momento exacto de inicio (200ms en el futuro del servidor)
+            const playAt = getServerTime() + 200;
+            socket.emit('hechizo', { tipo, jugador: playerNum, playAt });
+
+            // Visual Feedback local inmediato
+            showVisualFeedback(tipo);
+        }
+
+        function showVisualFeedback(tipo) {
+            const spellColors = {
+                'expelliarmus': 'radial-gradient(circle at center, rgba(168, 85, 247, 0.9) 0%, rgba(126, 34, 206, 0.3) 50%, transparent 75%)',
+                'accio': 'radial-gradient(circle at center, rgba(255, 255, 255, 0.9) 0%, rgba(200, 200, 200, 0.3) 50%, transparent 75%)',
+                'desmaius': 'radial-gradient(circle at center, rgba(239, 68, 68, 0.9) 0%, rgba(185, 28, 28, 0.3) 50%, transparent 75%)',
+                'protego': 'radial-gradient(circle at center, rgba(6, 182, 212, 0.9) 0%, rgba(8, 145, 178, 0.3) 50%, transparent 75%)'
+            };
+
+            const glow = document.getElementById('glow');
+            glow.style.background = spellColors[tipo];
+            document.body.classList.add('is-illuminated');
+            setMicStatus('heard', tipo.toUpperCase());
+
+            setTimeout(() => {
+                document.body.classList.remove('is-illuminated');
+                setMicStatus('', '');
+            }, 800);
+
+            if (tipo === 'protego') {
+                isProtected = true;
+                setTimeout(() => isProtected = false, 1500);
+            }
+        }
+
+        function setMicStatus(state, text) {
+            const el = document.getElementById('mic-status');
+            const label = document.getElementById('mic-label');
+            el.className = state;
+            label.textContent = text;
+        }
+
+        function handleScreenTap() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (!recognitionRunning) startVoiceRecognition();
+
+            // iOS: request motion sensor permission from user gesture (must happen before clash)
+            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                DeviceMotionEvent.requestPermission()
+                    .then(state => {
+                        console.log('Motion permission:', state);
+                    })
+                    .catch(err => console.warn('Motion permission error:', err));
+            }
+        }
+
+        function startVoiceRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) return;
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onresult = (event) => {
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (spellCooldown) break;
+                    const transcript = event.results[i][0].transcript.trim().toLowerCase();
+                    
+                    if (event.results[i].isFinal) {
+                        if (transcript.includes('expelli') || transcript.includes('peli') || transcript.includes('pele') || transcript.includes('expoli') || transcript.includes('exfoli') || transcript.includes('expedi') || transcript.includes('expira') || transcript.includes('explorer') || transcript.includes('palermo')) triggerSpell('expelliarmus');
+                        else if (transcript.includes('accio')) triggerSpell('accio');
+                        else if (transcript.includes('desmai') || transcript.includes('desmay') || transcript.includes('mayo') || transcript.includes('de mayo')) triggerSpell('desmaius');
+                        else if (transcript.includes('proteg') || transcript.includes('protej') || transcript.includes('proteo') || transcript.includes('potato') || transcript.includes('trago') || transcript.includes('prego') || transcript.includes('pro') || transcript.includes('proto') || transcript.includes('tego')) triggerSpell('protego');
+                    } else {
+                        setMicStatus('heard', transcript);
+                    }
+                }
+            };
+
+            recognition.onend = () => { if (recognitionRunning) recognition.start(); };
+            recognitionRunning = true;
+            recognition.start();
+        }
+    </script>
+</body>
+</html>

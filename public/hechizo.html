@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Duelo de Hechizos 3D</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            pointer-events: none;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.8);
+        }
+
+        .controls {
+            font-size: 1.2rem;
+            opacity: 0.8;
+        }
+
+        kbd {
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-family: monospace;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+
+
+
+    <div id="canvas-container"></div>
+
+    <script>
+        let scene, camera, renderer, clock;
+        let spells = [];
+        let particles = [];
+        let isColliding = false;
+        let collisionTimer = 0;
+        let collisionColorRight = 0x00f2ff;
+        let collisionColorLeft = 0xff3300;
+        const COLLISION_DURATION = 8; // seconds for the clash
+
+        // --- Clash mechanic state ---
+        let clashX = 0;              // Current position of clash point (-45 to +45)
+        const CLASH_LIMIT = 42;      // If clashX reaches this, that side loses
+        let instability = { 1: 0, 2: 0 }; // Running instability score per player
+        let clashLight = null;       // Light on the clash point
+
+        // --- Clock Sync (Network Precision) ---
+        let serverOffset = 0;
+
+        function syncClock() {
+            const t1 = Date.now();
+            socket.emit('ping_sync', { t1 });
+        }
+
+        function getServerTime() {
+            return Date.now() + serverOffset;
+        }
+
+        // Configuración inicial
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050505, 0.02); // Niebla más suave para no apagar el brillo
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 25; // Alejar un poco la cámara para ver mejor el duelo
+            camera.position.y = 2;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            clock = new THREE.Clock();
+
+            // Luces ambientales
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+
+
+            window.addEventListener('resize', onWindowResize, false);
+            window.addEventListener('keydown', handleKeyDown);
+
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Clase para el Hechizo (Rayo Eléctrico)
+        class Spell {
+            constructor(direction, type = 'default') {
+                this.direction = direction;
+                this.speed = 200;
+                this.alive = true;
+                this.isStopped = false;
+
+                // Color dinámico según el hechizo del celular
+                if (type === 'expelliarmus') {
+                    this.color = 0xbf40ff; // Violeta más intenso
+                } else if (type === 'accio') {
+                    this.color = 0xffffff; // Blanco puro
+                } else if (type === 'desmaius') {
+                    this.color = 0xff0000; // Rojo puro
+                } else if (type === 'protego') {
+                    this.color = 0x00ffff; // Cyan (Escudo)
+                } else {
+                    this.color = direction > 0 ? 0x00f2ff : 0xff3300; // Cyan y Naranja/Rojo vibrante
+                }
+
+                this.group = new THREE.Group();
+                this.segments = 40; // Más segmentos para mantener el detalle en el rayo largo
+                this.length = 90; // Aumentado para cubrir toda la pantalla
+                this.points = [];
+
+                // Crear los puntos iniciales
+                for (let i = 0; i <= this.segments; i++) {
+                    this.points.push(new THREE.Vector3(i * (this.length / this.segments) - (this.length / 2), 0, 0));
+                }
+
+                this.curve = new THREE.CatmullRomCurve3(this.points);
+
+                // Geometría del Núcleo (un poco más grueso para que destaque)
+                this.coreGeom = new THREE.TubeGeometry(this.curve, this.segments, 0.05, 8, false);
+                this.coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                this.core = new THREE.Mesh(this.coreGeom, this.coreMat);
+                this.group.add(this.core);
+
+                // Geometría del Aura (mucho más ancha y opaca)
+                this.auraGeom = new THREE.TubeGeometry(this.curve, this.segments, 0.3, 8, false);
+                this.auraMat = new THREE.MeshBasicMaterial({
+                    color: this.color,
+                    transparent: true,
+                    opacity: 0.6,
+                    blending: THREE.AdditiveBlending
+                });
+                this.aura = new THREE.Mesh(this.auraGeom, this.auraMat);
+                this.group.add(this.aura);
+
+                // Segunda capa de Aura (Glow exterior más suave)
+                this.glowGeom = new THREE.TubeGeometry(this.curve, this.segments, 0.6, 8, false);
+                this.glowMat = new THREE.MeshBasicMaterial({
+                    color: this.color,
+                    transparent: true,
+                    opacity: 0.2,
+                    blending: THREE.AdditiveBlending
+                });
+                this.glow = new THREE.Mesh(this.glowGeom, this.glowMat);
+                this.group.add(this.glow);
+
+                this.group.position.x = direction > 0 ? -40 : 40;
+                scene.add(this.group);
+
+                this.light = new THREE.PointLight(this.color, 5, 20); // Más intensidad y rango
+                this.group.add(this.light);
+            }
+
+            update(delta) {
+                if (!this.isStopped) {
+                    this.group.position.x += this.direction * this.speed * delta;
+                }
+
+                // Actualizar los puntos con ruido (efecto eléctrico)
+                for (let i = 1; i < this.segments; i++) {
+                    const noiseAmount = isColliding ? 0.8 : 0.4;
+                    this.points[i].y = (Math.random() - 0.5) * noiseAmount;
+                    this.points[i].z = (Math.random() - 0.5) * noiseAmount;
+                }
+
+                // Re-generar geometrías
+                this.core.geometry.dispose();
+                this.aura.geometry.dispose();
+
+                this.curve = new THREE.CatmullRomCurve3(this.points);
+                this.core.geometry = new THREE.TubeGeometry(this.curve, this.segments, 0.05, 4, false);
+                this.aura.geometry = new THREE.TubeGeometry(this.curve, this.segments, 0.2 + Math.random() * 0.2, 6, false);
+                this.glow.geometry = new THREE.TubeGeometry(this.curve, this.segments, 0.5 + Math.random() * 0.3, 6, false);
+
+                // Partículas del rastro (más visibles)
+                if (Math.random() > 0.2) {
+                    for (let i = 0; i < 2; i++) {
+                        const spawnPos = this.group.position.clone().add(this.points[Math.floor(Math.random() * this.segments)]);
+                        createSpark(spawnPos, this.color);
+                    }
+                }
+
+                if (Math.abs(this.group.position.x) > 80 && !this.isStopped) {
+                    this.destroy();
+                }
+            }
+
+            stop() {
+                this.isStopped = true;
+            }
+
+            resume() {
+                this.isStopped = false;
+            }
+
+            destroy() {
+                scene.remove(this.group);
+                this.core.geometry.dispose();
+                this.aura.geometry.dispose();
+                this.glow.geometry.dispose();
+                this.alive = false;
+            }
+        }
+
+        // Sistema de partículas mejorado (Chispas Líquidas)
+        function createSpark(pos, color, isLiquid = false) {
+            const size = isLiquid ? 0.05 : 0.06;
+            // Usamos SphereGeometry para que parezcan gotas líquidas
+            const geom = new THREE.SphereGeometry(size, 4, 4);
+            const mat = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                blending: THREE.AdditiveBlending
+            });
+            const p = new THREE.Mesh(geom, mat);
+            p.position.copy(pos);
+
+            const spread = isLiquid ? 6 : 2;
+            const velocity = new THREE.Vector3(
+                (Math.random() - 0.5) * spread,
+                (Math.random() - 0.2) * spread, // Un poco más hacia arriba
+                (Math.random() - 0.5) * spread
+            );
+
+            particles.push({
+                mesh: p,
+                vel: velocity,
+                life: isLiquid ? 2.0 : 1.0,
+                gravity: isLiquid ? -9.8 : 0,
+                isLiquid: isLiquid
+            });
+            scene.add(p);
+        }
+
+        function handleKeyDown(event) {
+            if (isColliding) return; // No lanzar mientras chocan
+
+            if (event.key === "ArrowRight") {
+                // Solo lanzamos si no hay otro rayo igual en pantalla
+                if (!spells.find(s => s.direction > 0)) {
+                    spells.push(new Spell(1));
+                }
+            } else if (event.key === "ArrowLeft") {
+                // Solo lanzamos si no hay otro rayo igual en pantalla
+                if (!spells.find(s => s.direction < 0)) {
+                    spells.push(new Spell(-1));
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            // Lógica de colisión (solo si hay hechizos de ambos bandos)
+            if (!isColliding && spells.length >= 2) {
+                const spellRight = spells.find(s => s.direction > 0);
+                const spellLeft = spells.find(s => s.direction < 0);
+
+                if (spellRight && spellLeft) {
+                    if (Math.abs(spellRight.group.position.x - spellLeft.group.position.x) < 5) {
+                        isColliding = true;
+                        collisionTimer = COLLISION_DURATION;
+                        clashX = 0;
+                        instability = { 1: 0, 2: 0 };
+
+                        collisionColorRight = spellRight.color;
+                        collisionColorLeft = spellLeft.color;
+
+                        spells.forEach(s => s.stop());
+                        spellRight.group.position.x = -(spellRight.length / 2);
+                        spellLeft.group.position.x = (spellLeft.length / 2);
+
+                        clashLight = new THREE.PointLight(0xffffff, 8, 30);
+                        clashLight.position.set(0, 0, 0);
+                        scene.add(clashLight);
+
+                        // Notify mobiles
+                        if (socket) socket.emit('choque-iniciado', {});
+                    }
+                }
+            }
+
+            if (isColliding) {
+                collisionTimer -= delta;
+
+                // --- Tug of war: move clashX based on instability difference ---
+                // Player 1 is on the left (direction>0, pushes right), Player 2 on the right
+                // Higher instability of P1 means clashX moves right (toward P1's side = negative)
+                // Higher instability of P2 means clashX moves left (toward P2's side = positive)
+                const diff = instability[1] - instability[2]; // positive = P1 is shakier
+                clashX -= diff * delta * 0.3; // scale factor for speed
+                clashX = Math.max(-CLASH_LIMIT, Math.min(CLASH_LIMIT, clashX));
+
+                // Move clash light
+                if (clashLight) clashLight.position.x = clashX;
+
+                // Move spells to follow clash point
+                const spellRight = spells.find(s => s.direction > 0);
+                const spellLeft  = spells.find(s => s.direction < 0);
+                if (spellRight) spellRight.group.position.x = clashX - (spellRight.length / 2);
+                if (spellLeft)  spellLeft.group.position.x  = clashX + (spellLeft.length  / 2);
+
+                // Sparks at clash point
+                for (let i = 0; i < 4; i++) {
+                    const color = Math.random() > 0.5 ? collisionColorRight : collisionColorLeft;
+                    createSpark(new THREE.Vector3(
+                        clashX + (Math.random() - 0.5),
+                        (Math.random() - 0.5) * 2,
+                        (Math.random() - 0.5) * 2
+                    ), color, true);
+                }
+
+                // Reset instability each frame (so it reflects CURRENT movement, not accumulated)
+                instability[1] *= 0.85;
+                instability[2] *= 0.85;
+
+                // Resolve conditions
+                const resolved = collisionTimer <= 0 || Math.abs(clashX) >= CLASH_LIMIT;
+                if (resolved) {
+                    // Loser is whoever is on the side clashX pushed into
+                    // clashX < 0 => P1 lost (clash moved to their side, left = P1)
+                    // clashX > 0 => P2 lost
+                    const loser = clashX < 0 ? 1 : 2;
+                    const damage = Math.abs(clashX) >= CLASH_LIMIT ? 40 : 20;
+
+                    if (socket) socket.emit('choque-terminado', { loser, damage });
+
+                    // Explosion of sparks
+                    for (let i = 0; i < 40; i++) {
+                        createSpark(new THREE.Vector3(
+                            clashX + (Math.random() - 0.5) * 3,
+                            (Math.random() - 0.5) * 4,
+                            (Math.random() - 0.5) * 4
+                        ), Math.random() > 0.5 ? collisionColorRight : collisionColorLeft, true);
+                    }
+
+                    // Cleanup
+                    if (clashLight)  { scene.remove(clashLight);  clashLight  = null; }
+                    isColliding = false;
+                    spells.forEach(s => s.destroy());
+                    spells = [];
+                }
+            }
+
+            // Actualizar hechizos
+            spells.forEach((s, index) => {
+                s.update(delta);
+                if (!s.alive) spells.splice(index, 1);
+            });
+
+            // Actualizar partículas
+            particles.forEach((p, index) => {
+                // Aplicar gravedad
+                if (p.gravity !== 0) {
+                    p.vel.y += p.gravity * delta;
+                }
+
+                p.mesh.position.add(p.vel.clone().multiplyScalar(delta));
+
+                const decay = p.isLiquid ? 0.5 : 2;
+                p.life -= delta * decay;
+                p.mesh.material.opacity = p.life;
+
+                if (p.isLiquid) {
+                    p.mesh.scale.set(p.life, p.life * 2, p.life); // Estirar un poco para efecto líquido
+                } else {
+                    p.mesh.scale.set(p.life, p.life, p.life);
+                }
+
+                if (p.life <= 0) {
+                    scene.remove(p.mesh);
+                    particles.splice(index, 1);
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        // Conexión Socket.io para escuchar al celular
+        const socket = typeof io !== 'undefined' ? io() : null;
+        if (socket) {
+            socket.on('pong_sync', ({ t1, serverTime }) => {
+                const latency = (Date.now() - t1) / 2;
+                serverOffset = serverTime + latency - Date.now();
+            });
+
+            // Sync clock on connect and every 10s
+            socket.on('connect', () => syncClock());
+            setInterval(syncClock, 10000);
+
+            socket.on('recibir-ataque', (data) => {
+                if (isColliding) return;
+
+                const playerNum = data.jugador || 2;
+                const direction = (playerNum === 1) ? 1 : -1;
+
+                if (!spells.find(s => s.direction === direction)) {
+                    const delay = data.playAt ? Math.max(0, data.playAt - getServerTime()) : 0;
+
+                    setTimeout(() => {
+                        if (!isColliding) {
+                            spells.push(new Spell(direction, data.tipo));
+                        }
+                    }, delay);
+                }
+            });
+
+            // Receive instability data from mobiles during clash
+            socket.on('inestabilidad', (data) => {
+                if (!isColliding) return;
+                // data = { jugador: 1|2, valor: number }
+                instability[data.jugador] = (instability[data.jugador] || 0) + data.valor;
+            });
+        }
+
+        window.onload = init;
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic WebRTC - High-End Screen</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #010405; font-family: sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        
+        #waiting {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #010405;
+            color: rgba(255,255,255,0.5);
+            font-family: monospace;
+            font-size: 1rem;
+            gap: 1rem;
+            z-index: 100;
+        }
+        #waiting h1 { color: #ff1100; font-size: 2.5rem; letter-spacing: 0.3em; text-shadow: 0 0 20px rgba(255,17,0,0.4); }
+
+        #health-container {
+            position: fixed;
+            bottom: 0; left: 0; width: 100%; height: 4px; display: flex; gap: 2px; z-index: 1000;
+        }
+        .hp-bar-bg { flex: 1; background: rgba(255,255,255,0.05); }
+        .hp-fill {
+            width: 100%; height: 100%; background: #ff1100;
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 0 15px rgba(255, 17, 0, 0.5);
+        }
+
+        #status {
+            position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+            color: rgba(255,255,255,0.1); font-family: monospace; font-size: 0.7rem; pointer-events: none;
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="waiting">
+        <h1>MAGIC</h1>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+            <input id="manual-room" placeholder="SALA" 
+                style="background:#0a0a0a; border:1px solid #ff1100; color:white; padding:0.6rem 1rem; border-radius:4px; font-family:monospace; width:120px; outline:none;">
+            <button onclick="window.connectManual()" 
+                style="background:#ff1100; border:none; color:white; padding:0.6rem 1rem; border-radius:4px; cursor:pointer; font-weight:bold;">CONECTAR</button>
+        </div>
+        <p id="debug-url" style="opacity:0.2; font-size:0.6rem; margin-top:1rem;"></p>
+    </div>
+
+    <div id="health-container">
+        <div class="hp-bar-bg"><div id="hp-p1" class="hp-fill"></div></div>
+        <div class="hp-bar-bg"><div id="hp-p2" class="hp-fill"></div></div>
+    </div>
+
+    <div id="status">PANTALLA ESPERANDO</div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        const snoise3D = `
+            vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+            vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+            float snoise(vec3 v) {
+                const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+                const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+                vec3 i  = floor(v + dot(v, C.yyy));
+                vec3 x0 = v - i + dot(i, C.xxx);
+                vec3 g = step(x0.yzx, x0.xyz);
+                vec3 l = 1.0 - g;
+                vec3 i1 = min( g.xyz, l.zxy );
+                vec3 i2 = max( g.xyz, l.zxy );
+                vec3 x1 = x0 - i1 + C.xxx;
+                vec3 x2 = x0 - i2 + C.yyy;
+                vec3 x3 = x0 - D.yyy;
+                i = mod289(i);
+                vec4 p = permute( permute( permute(
+                            i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+                        + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
+                        + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+                float n_ = 0.142857142857;
+                vec3 ns = n_ * D.wyz - D.xzx;
+                vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+                vec4 x_ = floor(j * ns.z);
+                vec4 y_ = floor(j - 7.0 * x_ );
+                vec4 x = x_ *ns.x + ns.yyyy;
+                vec4 y = y_ *ns.x + ns.yyyy;
+                vec4 h = 1.0 - abs(x) - abs(y);
+                vec4 b0 = vec4( x.xy, y.xy );
+                vec4 b1 = vec4( x.zw, y.zw );
+                vec4 s0 = floor(b0)*2.0 + 1.0;
+                vec4 s1 = floor(b1)*2.0 + 1.0;
+                vec4 sh = -step(h, vec4(0.0));
+                vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+                vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+                vec3 p0 = vec3(a0.xy,h.x);
+                vec3 p1 = vec3(a0.zw,h.y);
+                vec3 p2 = vec3(a1.xy,h.z);
+                vec3 p3 = vec3(a1.zw,h.w);
+                vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+                p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+                vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+                m = m * m;
+                return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3) ) );
+            }
+        `;
+
+        const raymarchFragShader = `
+            precision highp float;
+            varying vec2 vUv;
+            uniform float uAspect;
+            uniform vec3 uCamPos;
+            uniform vec3 uBalls[150];
+            uniform float uRadii[150];
+            uniform int uCount;
+            uniform vec3 colorL;
+            uniform vec3 colorR;
+            uniform float uClashX;
+            uniform float uClashRadius;
+
+            float smin(float a, float b, float k) {
+                float h = max(k - abs(a - b), 0.0) / k;
+                return min(a, b) - h * h * k * 0.25;
+            }
+
+            float sdSphere(vec3 p, vec3 c, float r) { return length(p - c) - r; }
+            float sdBox(vec3 p, vec3 b) {
+                vec3 q = abs(p) - b;
+                return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+            }
+
+            float field(vec3 p) {
+                // Núcleo central del choque móvil
+                float d = sdSphere(p, vec3(uClashX, 0.0, 0.0), uClashRadius);
+                
+                float dDrops = 100.0;
+                bool hasDrops = false;
+                for (int i = 0; i < 150; i++) {
+                    if (i >= uCount) break;
+                    float dSphere = sdSphere(p, uBalls[i], uRadii[i]);
+                    // Fusión dinámica: más fuerte al caer
+                    float dynamicK = mix(1.2, 5.5, smoothstep(0.0, -15.0, p.y));
+                    dDrops = smin(dDrops, dSphere, dynamicK * 0.5);
+                    hasDrops = true;
+                }
+                
+                // Rayos laterales que siguen al choque (solo si hay choque)
+                float rayL = sdBox(p - vec3(uClashX - 22.0, 0.0, 0.0), vec3(20.0, 0.005, 0.005));
+                float rayR = sdBox(p - vec3(uClashX + 22.0, 0.0, 0.0), vec3(20.0, 0.005, 0.005));
+                float dRays = (uClashRadius > 0.0) ? min(rayL, rayR) : 100.0;
+                
+                if (hasDrops) {
+                    float dCombined = smin(dDrops, dRays, 1.4 * 0.5);
+                    d = smin(d, dCombined, 1.6 * 0.5);
+                } else {
+                    d = smin(d, dRays, 1.0 * 0.5);
+                }
+                return d;
+            }
+
+            vec3 calcNormal(vec3 p) {
+                vec2 e = vec2(0.01, 0.0);
+                return normalize(vec3(
+                    field(p+e.xyy) - field(p-e.xyy),
+                    field(p+e.yxy) - field(p-e.yxy),
+                    field(p+e.yyx) - field(p-e.yyx)
+                ));
+            }
+
+            void main() {
+                vec2 uv = vUv * 2.0 - 1.0;
+                uv.x *= uAspect;
+                vec3 ro = uCamPos;
+                vec3 forward = normalize(-ro);
+                vec3 right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
+                vec3 up = cross(right, forward);
+                vec3 rd = normalize(forward * 2.0 + right * uv.x + up * uv.y);
+                float t = 0.0;
+                float hit = 0.0;
+                for (int i = 0; i < 35; i++) {
+                    vec3 p = ro + rd * t;
+                    float d = field(p);
+                    if (d < 0.01) { hit = 1.0; break; }
+                    if (t > 70.0) break;
+                    t += d * 0.85;
+                }
+                if (hit < 0.5) discard;
+                vec3 p = ro + rd * t;
+                vec3 n = calcNormal(p);
+                float mixFactor = smoothstep(uClashX - 2.0, uClashX + 2.0, p.x);
+                vec3 baseCol = mix(colorL, colorR, mixFactor);
+                vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
+                float diff = max(dot(n, lightDir), 0.0);
+                vec3 viewDir = normalize(ro - p);
+                vec3 halfDir = normalize(lightDir + viewDir);
+                float spec = pow(max(dot(n, halfDir), 0.0), 32.0);
+                vec3 col = baseCol * (diff * 0.5 + 0.5) + vec3(1.0) * spec * 0.7;
+                gl_FragColor = vec4(col, 1.0);
+            }
+        `;
+
+        // --- LÓGICA ---
+        let scene, camera, renderer, composer, bloomPass;
+        let beamL, beamR, collisionGroup, plasmaMat, raymarchMat, shieldL, shieldR;
+        let isColliding = false;
+        let clashX = 0;
+        let clashRadius = 0;
+        let instability = { 1: 0, 2: 0 };
+        const liquidDrops = [];
+        const sparks = [];
+        const MAX_BALLS = 150;
+        const ballPositions = new Float32Array(MAX_BALLS * 3);
+        const ballRadii = new Float32Array(MAX_BALLS);
+        let healthP1 = 100, healthP2 = 100;
+        let currentLColor = new THREE.Color(0x00ff44);
+        let currentRColor = new THREE.Color(0xff1100);
+
+        const spellVertexShader = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const spellFragmentShader = `uniform float time; uniform vec3 beamColor; uniform float direction; varying vec2 vUv; ${snoise3D} void main() { vec2 uv = vUv; float speed = time * 8.0 * direction; float distY = abs(uv.y - 0.5); float noiseX = snoise(vec3(uv.x * 3.0 - speed, time * 5.0, 0.0)) * 0.08; float core = smoothstep(0.04, 0.0, abs((uv.y - 0.5) + noiseX)); float turb = abs(snoise(vec3(uv.x * 5.0 - speed * 1.5, uv.y * 10.0, time * 8.0))); float electric = smoothstep(0.2, 0.0, turb + distY * 0.8); float aura = smoothstep(0.4, 0.0, distY) * 0.4; float alpha = max(core, max(electric, aura)) * smoothstep(0.0, 0.15, uv.x) * smoothstep(1.0, 0.85, uv.x); vec3 finalColor = mix(beamColor, vec3(1.0), core * 1.5); gl_FragColor = vec4(finalColor, alpha); }`;
+                const plasmaFragmentShader = `uniform float time; uniform vec3 colorL; uniform vec3 colorR; varying vec2 vUv; ${snoise3D} void main() { vec2 cUv = vUv * 2.0 - 1.0; float dist = length(cUv); float starburst = (sin(atan(cUv.y, cUv.x)*12.0+time*8.0)*0.5+0.5) * smoothstep(1.0, 0.0, dist); float plasma = (snoise(vec3(cUv*2.0, time*3.0))*0.5+0.5) * (snoise(vec3(cUv*4.0, -time*2.0))*0.5+0.5); float mixFactor = smoothstep(-0.2, 0.2, cUv.x + snoise(vec3(cUv*2.0, time))*0.3); vec3 color = mix(colorL, colorR, mixFactor); gl_FragColor = vec4(mix(color, vec3(1.0), smoothstep(0.3, 0.0, dist)), smoothstep(1.0, 0.1, dist) * (plasma + starburst)); }`;
+                const flareFragmentShader = `varying vec2 vUv; void main() { vec2 uv = vUv * 2.0 - 1.0; float intensity = smoothstep(1.0, 0.0, abs(uv.y * 15.0)) * smoothstep(1.0, 0.0, abs(uv.x)); gl_FragColor = vec4(1.0, 1.0, 0.9, intensity * 0.8); }`;
+        const shieldFragmentShader = `uniform float time; uniform vec3 color; varying vec2 vUv; void main() { vec2 uv = vUv * 2.0 - 1.0; float dist = length(uv); float glow = pow(1.0 - dist, 3.0); float pulse = 0.8 + sin(time * 5.0) * 0.2; float alpha = smoothstep(1.0, 0.0, dist) * glow * pulse; gl_FragColor = vec4(color * 1.5, alpha * 0.7); }`;
+
+        class Spark {
+            constructor() { this.mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.1, 1), new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending })); this.mesh.visible = false; scene.add(this.mesh); }
+            spawn(x, color) { this.mesh.position.set(x, (Math.random()-0.5)*4, (Math.random()-0.5)*4); this.vel = new THREE.Vector3((Math.random()-0.5)*0.4, (Math.random()-0.5)*0.6, (Math.random()-0.5)*0.4); this.life = 1.0; this.mesh.material.color.set(color); this.mesh.visible = true; }
+            update(ts) { if (!this.mesh.visible) return; this.mesh.position.addScaledVector(this.vel, ts); this.vel.y -= 0.005*ts; this.life -= 0.02*ts; this.mesh.material.opacity = this.life; if (this.life <= 0) this.mesh.visible = false; }
+        }
+
+        class LiquidDrop {
+            constructor(isAmbient = false) { this.active = false; this.isAmbient = isAmbient; this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.radius = 0; }
+            reset() {
+                const side = Math.random() > 0.5 ? 1 : -1;
+                this.pos.set(clashX + (Math.random() - 0.5) * 15 * 0.5, (Math.random() - 0.5) * 2 * 0.5, 0);
+                this.vel.set((0.05 + Math.random() * 0.15) * side * 0.5, (Math.random() - 0.5) * 0.1 * 0.5, (Math.random() - 0.5) * 0.05 * 0.5);
+                this.targetRadius = (0.4 + Math.random() * 0.8) * 0.5;
+                this.radius = this.targetRadius * 0.2;
+                this.active = true;
+                this.gravity = (0.002 + Math.random() * 0.003) * 0.5;
+            }
+            spawn(x, y, vx, vy, radius) { this.pos.set(x, y, 0); this.vel.set(vx, vy, (Math.random()-0.5)*0.05); this.targetRadius = radius * 0.5; this.radius = this.targetRadius*0.2; this.active = true; this.gravity = (0.002+Math.random()*0.002)*0.5; }
+            update(ts) { if (!this.active) return; this.pos.addScaledVector(this.vel, ts); this.vel.y -= this.gravity*ts; if (this.radius < this.targetRadius) this.radius += (this.targetRadius*0.02)*ts; if (this.pos.y < -40 || Math.abs(this.pos.x) > 60) { if (this.isAmbient && isColliding) this.reset(); else this.active = false; } }
+        }
+
+        class FormationEmitter {
+            constructor(type, interval) { this.type = type; this.interval = interval; this.timer = 0; }
+            update(pool, ts = 1.0) {
+                this.timer += ts;
+                if (this.timer >= this.interval) {
+                    this.timer = 0;
+                    const burstSize = 2 + Math.floor(Math.random() * 3);
+                    const burstX = clashX + (this.type === 'voldemort_side' ? -2 : this.type === 'harry_side' ? 2 : 0) + (Math.random() - 0.5) * 20;
+                    const baseVx = this.type === 'voldemort_side' ? -0.15 : this.type === 'harry_side' ? 0.15 : 0;
+                    for (let i = 0; i < burstSize; i++) {
+                        const drop = pool.find(d => !d.active && !d.isAmbient);
+                        if (!drop) break;
+                        const vx = baseVx + (Math.random() - 0.5) * 0.05;
+                        const vy = (Math.random() - 0.5) * 0.1;
+                        drop.spawn(burstX + (Math.random() - 0.5) * 2, 0, vx, vy, 0.4 + Math.random() * 0.5);
+                    }
+                }
+            }
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 55;
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(0.8);
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            document.body.appendChild(renderer.domElement);
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(new RenderPass(scene, camera));
+            bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.2, 0.4, 0.1);
+            composer.addPass(bloomPass);
+
+            const createBeam = (dir) => {
+                const mat = new THREE.ShaderMaterial({ vertexShader: spellVertexShader, fragmentShader: spellFragmentShader, uniforms: { time: { value: 0 }, beamColor: { value: new THREE.Color() }, direction: { value: dir } }, transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false });
+                const group = new THREE.Group();
+                const geo = new THREE.PlaneGeometry(250, 5, 64, 1); geo.translate(dir*125, 0, 0);
+                group.add(new THREE.Mesh(geo, mat), new THREE.Mesh(geo, mat));
+                group.children[1].rotation.x = Math.PI/2; group.position.x = dir > 0 ? -300 : 300; group.visible = false;
+                scene.add(group); return { group, mat };
+            };
+            beamL = createBeam(1); beamR = createBeam(-1);
+
+            collisionGroup = new THREE.Group();
+            plasmaMat = new THREE.ShaderMaterial({ vertexShader: spellVertexShader, fragmentShader: plasmaFragmentShader, uniforms: { time: { value: 0 }, colorL: { value: currentLColor }, colorR: { value: currentRColor } }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+            collisionGroup.add(new THREE.Mesh(new THREE.PlaneGeometry(18, 18), plasmaMat));
+            
+            const whiteCore = new THREE.Mesh(new THREE.SphereGeometry(1.0, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+            whiteCore.name = "whiteCore";
+            collisionGroup.add(whiteCore);
+
+            const flareMat = new THREE.ShaderMaterial({ vertexShader: spellVertexShader, fragmentShader: flareFragmentShader, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+            const flare = new THREE.Mesh(new THREE.PlaneGeometry(60, 3), flareMat);
+            flare.name = "flare";
+            collisionGroup.add(flare);
+
+            collisionGroup.visible = false;
+            scene.add(collisionGroup);
+
+            raymarchMat = new THREE.ShaderMaterial({ vertexShader: spellVertexShader, fragmentShader: raymarchFragShader, transparent: true, uniforms: { uAspect: { value: camera.aspect }, uCamPos: { value: camera.position }, uBalls: { value: ballPositions }, uRadii: { value: ballRadii }, uCount: { value: 0 }, colorL: { value: currentLColor }, colorR: { value: currentRColor }, uClashX: { value: 0 }, uClashRadius: { value: 0 } } });
+            scene.add(new THREE.Mesh(new THREE.PlaneGeometry(100, 100), raymarchMat));
+
+            for (let i = 0; i < 60; i++) liquidDrops.push(new LiquidDrop(true));
+            for (let i = 0; i < 90; i++) liquidDrops.push(new LiquidDrop(false));
+            for (let i = 0; i < 50; i++) sparks.push(new Spark());
+
+            const createShield = (xPos) => {
+                const mat = new THREE.ShaderMaterial({ vertexShader: spellVertexShader, fragmentShader: shieldFragmentShader, uniforms: { time: { value: 0 }, color: { value: new THREE.Color(0x00ffff) } }, transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false });
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(8, 32, 32, 0, Math.PI * 2, 0, Math.PI * 0.5), mat);
+                mesh.position.set(xPos, 0, 0);
+                mesh.rotation.z = xPos > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+                mesh.rotation.x = -Math.PI * 0.5;
+                mesh.visible = false;
+                scene.add(mesh);
+                return mesh;
+            };
+            shieldL = createShield(-45);
+            shieldR = createShield(45);
+
+            animate();
+        }
+
+        let ambientSpawnTimer = 0;
+        const formationEmitters = [
+            new FormationEmitter('voldemort_side', 45),
+            new FormationEmitter('harry_side', 45),
+        ];
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now() * 0.001;
+            beamL.mat.uniforms.time.value = time;
+            beamR.mat.uniforms.time.value = time;
+            plasmaMat.uniforms.time.value = time;
+            shieldL.material.uniforms.time.value = time;
+            shieldR.material.uniforms.time.value = time;
+
+            if (isColliding) {
+                clashX -= (instability[1] - instability[2]) * 0.03;
+                clashX = Math.max(-40, Math.min(40, clashX));
+                clashRadius = 1.5 * 0.5 + Math.sin(time*10)*0.1;
+                collisionGroup.position.x = clashX;
+                
+                const whiteCore = collisionGroup.getObjectByName("whiteCore");
+                const flare = collisionGroup.getObjectByName("flare");
+                if (whiteCore) whiteCore.scale.setScalar(1.0 + Math.sin(time * 20) * 0.2);
+                if (flare) flare.quaternion.copy(camera.quaternion);
+                
+                beamL.group.scale.x = 1.0;
+                beamR.group.scale.x = 1.0;
+                beamL.group.position.x = clashX - 250; 
+                beamR.group.position.x = clashX + 250; 
+                instability[1] *= 0.85; instability[2] *= 0.85;
+
+                // Nacimiento orgánico
+                ambientSpawnTimer += 1.4;
+                if (ambientSpawnTimer >= 12) {
+                    ambientSpawnTimer = 0;
+                    const nextAmbient = liquidDrops.find(d => d.isAmbient && !d.active);
+                    if (nextAmbient) nextAmbient.reset();
+                }
+                // Emisores de formación
+                formationEmitters.forEach(e => e.update(liquidDrops, 1.4));
+            } else {
+                clashRadius = 0;
+                // Beam L (Mago 1) disparando hacia la derecha, bloqueado por Shield R (Mago 2)
+                if (beamL.group.visible) {
+                    // Ajustamos el offset (de 250 a 242) para compensar el fade del shader y el radio del escudo
+                    const tipX = beamL.group.position.x + 242;
+                    const isBlocked = shieldR.visible && tipX >= (shieldR.position.x - 6);
+                    
+                    if (!isBlocked) {
+                        beamL.group.position.x += 1.5;
+                    } else {
+                        // Chispas en el punto de impacto visual
+                        if (Math.random() > 0.6) sparks.find(s => !s.mesh.visible)?.spawn(shieldR.position.x - 5, currentLColor);
+                    }
+                    
+                    if (beamL.group.position.x > 300) beamL.group.visible = false;
+                    if (Math.random() > 0.7 && !isBlocked) sparks.find(s => !s.mesh.visible)?.spawn(beamL.group.position.x, currentLColor);
+                }
+
+                // Beam R (Mago 2) disparando hacia la izquierda, bloqueado por Shield L (Mago 1)
+                if (beamR.group.visible) {
+                    const tipX = beamR.group.position.x - 242;
+                    const isBlocked = shieldL.visible && tipX <= (shieldL.position.x + 6);
+
+                    if (!isBlocked) {
+                        beamR.group.position.x -= 1.5;
+                    } else {
+                        // Chispas en el punto de impacto visual
+                        if (Math.random() > 0.6) sparks.find(s => !s.mesh.visible)?.spawn(shieldL.position.x + 5, currentRColor);
+                    }
+
+                    if (beamR.group.position.x < -300) beamR.group.visible = false;
+                    if (Math.random() > 0.7 && !isBlocked) sparks.find(s => !s.mesh.visible)?.spawn(beamR.group.position.x, currentRColor);
+                }
+            }
+
+            let count = 0;
+            liquidDrops.forEach(d => {
+                d.update(2.8);
+                if (d.active && count < MAX_BALLS) {
+                    ballPositions[count*3+0]=d.pos.x; ballPositions[count*3+1]=d.pos.y; ballPositions[count*3+2]=d.pos.z; ballRadii[count] = d.radius; count++;
+                }
+            });
+            raymarchMat.uniforms.uCount.value = count;
+            raymarchMat.uniforms.uClashX.value = clashX;
+            raymarchMat.uniforms.uClashRadius.value = clashRadius;
+            sparks.forEach(s => s.update(1.0));
+            composer.render();
+        }
+
+        const socket = io();
+        const colorMap = { 'expelliarmus': 0xbf40ff, 'accio': 0xffffff, 'desmaius': 0xff1100, 'protego': 0x00ffff };
+        
+        let roomId = new URLSearchParams(window.location.search).get('room');
+
+        const roomInput = document.getElementById('manual-room');
+        // Autocompletar con el último código guardado
+        const lastRoom = localStorage.getItem('lastRoomId');
+        if (lastRoom && !roomInput.value) {
+            roomInput.placeholder = `ÚLTIMA: ${lastRoom}`;
+        }
+
+        roomInput.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp' && lastRoom) {
+                roomInput.value = lastRoom;
+            }
+            if (e.key === 'Enter') {
+                window.connectManual();
+            }
+        });
+
+        window.connectManual = () => {
+            const id = roomInput.value.trim().toUpperCase() || lastRoom;
+            if (id) { 
+                roomId = id;
+                localStorage.setItem('lastRoomId', id); // Guardar para la próxima
+                socket.emit('screen-join', roomId); 
+                document.getElementById('waiting').style.display='none'; 
+                document.getElementById('status').textContent=`SALA: ${roomId}`; 
+                init(); 
+            }
+        };
+        
+        if (roomId) { 
+            roomInput.value = roomId; 
+            window.connectManual(); 
+        }
+
+        socket.on('game-event', (data) => {
+            if (data.event === 'spell') {
+                const color = new THREE.Color(colorMap[data.tipo] || 0xffffff);
+                const isShort = (data.tipo === 'expelliarmus' || data.tipo === 'desmaius');
+                const scale = isShort ? 0.35 : 1.0;
+                const startX = isShort ? 60 : 300;
+
+                if (data.tipo === 'protego') {
+                    const shield = data.jugador === 1 ? shieldL : shieldR;
+                    shield.visible = true;
+                    shield.material.uniforms.color.value.set(color);
+                    setTimeout(() => { shield.visible = false; }, 1500);
+                    return;
+                }
+
+                if (data.jugador === 1) { 
+                    beamL.group.scale.x = scale;
+                    beamL.group.visible = true; 
+                    beamL.group.position.x = -startX; 
+                    beamL.mat.uniforms.beamColor.value.copy(color); 
+                    currentLColor.copy(color); 
+                    plasmaMat.uniforms.colorL.value.copy(color); 
+                    raymarchMat.uniforms.colorL.value.copy(color); 
+                }
+                else { 
+                    beamR.group.scale.x = scale;
+                    beamR.group.visible = true; 
+                    beamR.group.position.x = startX; 
+                    beamR.mat.uniforms.beamColor.value.copy(color); 
+                    currentRColor.copy(color); 
+                    plasmaMat.uniforms.colorR.value.copy(color); 
+                    raymarchMat.uniforms.colorR.value.copy(color); 
+                }
+                if (data.tipo !== 'protego') {
+                    setTimeout(() => {
+                        let dmg = data.tipo === 'desmaius' ? 25 : 10;
+                        if (data.jugador === 1) { healthP2 = Math.max(0, healthP2 - dmg); document.getElementById('hp-p2').style.width = healthP2 + '%'; }
+                        else { healthP1 = Math.max(0, healthP1 - dmg); document.getElementById('hp-p1').style.width = healthP1 + '%'; }
+                    }, 800);
+                }
+            } else if (data.event === 'motion') { instability[data.jugador] += data.valor; }
+            else if (data.event === 'clash-start') { isColliding = true; collisionGroup.visible = true; clashX = 0; }
+            else if (data.event === 'clash-end') { isColliding = false; collisionGroup.visible = false; beamL.group.visible = false; beamR.group.visible = false; }
+        });
+    </script>
+</body>
+</html>

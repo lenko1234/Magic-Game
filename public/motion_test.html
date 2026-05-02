@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Motion Tester</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;500;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #080810;
+            --grid: rgba(0, 255, 180, 0.06);
+            --accent: #00ffb4;
+            --accent2: #ff3cac;
+            --accent3: #3c9eff;
+            --text: rgba(255, 255, 255, 0.85);
+            --dim: rgba(255, 255, 255, 0.3);
+            --panel: rgba(0, 255, 180, 0.05);
+            --border: rgba(0, 255, 180, 0.15);
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Rajdhani', sans-serif;
+            height: 100dvh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Scanline effect */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(0, 0, 0, 0.03) 2px,
+                    rgba(0, 0, 0, 0.03) 4px);
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            min-height: 0;
+        }
+
+        canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        /* HUD overlay */
+        #hud {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        /* Corner brackets */
+        .corner {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            opacity: 0.4;
+        }
+
+        .corner-tl {
+            top: 12px;
+            left: 12px;
+            border-top: 1px solid var(--accent);
+            border-left: 1px solid var(--accent);
+        }
+
+        .corner-tr {
+            top: 12px;
+            right: 12px;
+            border-top: 1px solid var(--accent);
+            border-right: 1px solid var(--accent);
+        }
+
+        .corner-bl {
+            bottom: 12px;
+            left: 12px;
+            border-bottom: 1px solid var(--accent);
+            border-left: 1px solid var(--accent);
+        }
+
+        .corner-br {
+            bottom: 12px;
+            right: 12px;
+            border-bottom: 1px solid var(--accent);
+            border-right: 1px solid var(--accent);
+        }
+
+        #label-top {
+            position: absolute;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.6rem;
+            color: var(--accent);
+            opacity: 0.5;
+            letter-spacing: 0.2em;
+        }
+
+        /* Data panels */
+        #panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            border-top: 1px solid var(--border);
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px 10px;
+        }
+
+        .panel-title {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.55rem;
+            color: var(--accent);
+            letter-spacing: 0.15em;
+            opacity: 0.6;
+            margin-bottom: 6px;
+        }
+
+        .axis-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+
+        .axis-label {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.65rem;
+            width: 14px;
+            color: var(--dim);
+        }
+
+        .axis-bar-track {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 2px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .axis-bar {
+            position: absolute;
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.05s linear, left 0.05s linear;
+        }
+
+        .axis-x .axis-bar {
+            background: var(--accent2);
+        }
+
+        .axis-y .axis-bar {
+            background: var(--accent);
+        }
+
+        .axis-z .axis-bar {
+            background: var(--accent3);
+        }
+
+        .axis-val {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.6rem;
+            width: 40px;
+            text-align: right;
+            color: var(--text);
+        }
+
+        /* Force meter */
+        #force-panel {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #force-label {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.55rem;
+            color: var(--accent);
+            letter-spacing: 0.1em;
+            opacity: 0.6;
+            white-space: nowrap;
+        }
+
+        #force-track {
+            flex: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        #force-bar {
+            height: 100%;
+            width: 0%;
+            border-radius: 3px;
+            background: linear-gradient(to right, var(--accent), var(--accent2));
+            transition: width 0.05s linear;
+            box-shadow: 0 0 8px var(--accent);
+        }
+
+        #force-val {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.7rem;
+            width: 50px;
+            text-align: right;
+        }
+
+        /* Gesture log */
+        #log-panel {
+            grid-column: 1 / -1;
+        }
+
+        #log-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            max-height: 48px;
+            overflow: hidden;
+        }
+
+        .log-entry {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.6rem;
+            color: var(--accent);
+            opacity: 0;
+            animation: fadeLog 3s forwards;
+        }
+
+        @keyframes fadeLog {
+            0% {
+                opacity: 1;
+            }
+
+            60% {
+                opacity: 1;
+            }
+
+            100% {
+                opacity: 0;
+            }
+        }
+
+        /* Start button */
+        #start-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 24px;
+            z-index: 500;
+        }
+
+        #start-overlay h1 {
+            font-family: 'Rajdhani', sans-serif;
+            font-weight: 700;
+            font-size: 1.8rem;
+            letter-spacing: 0.15em;
+            color: var(--accent);
+            text-shadow: 0 0 30px var(--accent);
+        }
+
+        #start-overlay p {
+            font-size: 0.9rem;
+            color: var(--dim);
+            text-align: center;
+            max-width: 260px;
+            line-height: 1.5;
+        }
+        
+        .role-btn {
+            padding: 14px 40px;
+            background: transparent;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.85rem;
+            letter-spacing: 0.2em;
+            border-radius: 2px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(0, 255, 180, 0.2), inset 0 0 20px rgba(0, 255, 180, 0.05);
+            transition: all 0.2s;
+            width: 100%;
+            max-width: 280px;
+        }
+
+        .role-btn:active {
+            background: rgba(0, 255, 180, 0.1);
+            box-shadow: 0 0 40px rgba(0, 255, 180, 0.4);
+        }
+
+        #btn-pc {
+            border-color: var(--accent3);
+            color: var(--accent3);
+            box-shadow: 0 0 20px rgba(60, 158, 255, 0.2), inset 0 0 20px rgba(60, 158, 255, 0.05);
+        }
+        #btn-pc:active {
+            background: rgba(60, 158, 255, 0.1);
+            box-shadow: 0 0 40px rgba(60, 158, 255, 0.4);
+        }
+
+        /* Shake flash */
+        #shake-flash {
+            position: fixed;
+            inset: 0;
+            background: var(--accent2);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 900;
+            transition: opacity 0.05s;
+        }
+
+        #gesture-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-family: 'Rajdhani', sans-serif;
+            font-weight: 700;
+            font-size: 2rem;
+            letter-spacing: 0.2em;
+            color: var(--accent2);
+            text-shadow: 0 0 40px var(--accent2);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="start-overlay">
+        <h1>MOTION LAB</h1>
+        <p>Elegí cómo usar este dispositivo:</p>
+        <button id="btn-pc" class="role-btn">VISUALIZADOR (PC)</button>
+        <button id="btn-mobile" class="role-btn">SENSORES (MÓVIL)</button>
+    </div>
+
+    <div id="shake-flash"></div>
+
+    <div id="canvas-container">
+        <canvas id="c"></canvas>
+        <div id="hud">
+            <div class="corner corner-tl"></div>
+            <div class="corner corner-tr"></div>
+            <div class="corner corner-bl"></div>
+            <div class="corner corner-br"></div>
+            <div id="label-top">ORIENTATION · MOTION DEBUGGER v1.0</div>
+            <div id="gesture-display"></div>
+        </div>
+    </div>
+
+    <div id="panels">
+        <!-- Orientation -->
+        <div class="panel">
+            <div class="panel-title">ORIENTACIÓN</div>
+            <div class="axis-row axis-x">
+                <span class="axis-label">α</span>
+                <div class="axis-bar-track">
+                    <div class="axis-bar" id="bar-alpha"></div>
+                </div>
+                <span class="axis-val" id="val-alpha">0°</span>
+            </div>
+            <div class="axis-row axis-y">
+                <span class="axis-label">β</span>
+                <div class="axis-bar-track">
+                    <div class="axis-bar" id="bar-beta"></div>
+                </div>
+                <span class="axis-val" id="val-beta">0°</span>
+            </div>
+            <div class="axis-row axis-z">
+                <span class="axis-label">γ</span>
+                <div class="axis-bar-track">
+                    <div class="axis-bar" id="bar-gamma"></div>
+                </div>
+                <span class="axis-val" id="val-gamma">0°</span>
+            </div>
+        </div>
+
+        <!-- Acceleration -->
+        <div class="panel">
+            <div class="panel-title">ACELERACIÓN</div>
+            <div class="axis-row axis-x">
+                <span class="axis-label">X</span>
+                <div class="axis-bar-track">
+                    <div class="axis-bar" id="bar-ax"></div>
+                </div>
+                <span class="axis-val" id="val-ax">0</span>
+            </div>
+            <div class="axis-row axis-y">
+                <span class="axis-label">Y</span>
+                <div class="axis-bar-track">
+                    <div class="axis-bar" id="bar-ay"></div>
+                </div>
+                <span class="axis-val" id="val-ay">0</span>
+            </div>
+            <div class="axis-row axis-z">
+                <span class="axis-label">Z</span>
+                <div class="axis-bar-track">
+                    <div class="axis-bar" id="bar-az"></div>
+                </div>
+                <span class="axis-val" id="val-az">0</span>
+            </div>
+        </div>
+
+        <!-- Force -->
+        <div class="panel" id="force-panel">
+            <span id="force-label">FUERZA TOTAL</span>
+            <div id="force-track">
+                <div id="force-bar"></div>
+            </div>
+            <span id="force-val">0 m/s²</span>
+        </div>
+
+        <!-- Log -->
+        <div class="panel" id="log-panel">
+            <div class="panel-title">EVENTOS DETECTADOS</div>
+            <div id="log-list"></div>
+        </div>
+    </div>
+
+    <!-- Cargar Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // ── Socket.IO setup ─────────────────────────────────────────
+        const socket = io();
+
+        // ── Three.js setup ──────────────────────────────────────────
+        const canvas = document.getElementById('c');
+        const container = document.getElementById('canvas-container');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setClearColor(0x080810, 1);
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+        camera.position.set(0, 1.5, 4);
+        camera.lookAt(0, 0, 0);
+
+        function resize() {
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            renderer.setSize(w, h, false);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        // Grid floor
+        const gridHelper = new THREE.GridHelper(6, 12, 0x00ffb4, 0x001a0f);
+        gridHelper.position.y = -1.2;
+        scene.add(gridHelper);
+
+        // Axes helper
+        const axesHelper = new THREE.AxesHelper(1.5);
+        scene.add(axesHelper);
+
+        // Phone body — we wrap everything in a phoneModel to align it with sensor "zero" (flat on table)
+        const phoneGroup = new THREE.Group();
+        const phoneModel = new THREE.Group();
+        phoneGroup.add(phoneModel);
+
+        const bodyGeo = new THREE.BoxGeometry(0.7, 1.4, 0.08);
+        const bodyMat = new THREE.MeshPhongMaterial({
+            color: 0x111122,
+            emissive: 0x001133,
+            specular: 0x4488ff,
+            shininess: 80,
+        });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        phoneModel.add(body);
+
+        // Screen
+        const screenGeo = new THREE.PlaneGeometry(0.6, 1.2);
+        const screenMat = new THREE.MeshBasicMaterial({ color: 0x00ffb4, transparent: true, opacity: 0.08 });
+        const screen = new THREE.Mesh(screenGeo, screenMat);
+        screen.position.z = 0.045;
+        phoneModel.add(screen);
+
+        // Screen border glow lines
+        const edges = new THREE.EdgesGeometry(bodyGeo);
+        const edgeMat = new THREE.LineBasicMaterial({ color: 0x00ffb4, transparent: true, opacity: 0.3 });
+        const edgeMesh = new THREE.LineSegments(edges, edgeMat);
+        phoneModel.add(edgeMesh);
+
+        // Camera dot
+        const camDotGeo = new THREE.CircleGeometry(0.03, 16);
+        const camDotMat = new THREE.MeshBasicMaterial({ color: 0x3c9eff });
+        const camDot = new THREE.Mesh(camDotGeo, camDotMat);
+        camDot.position.set(0, 0.62, 0.045);
+        phoneModel.add(camDot);
+
+        // IMPORTANTE: Rotamos el modelo para que "cero" sea acostado en la mesa
+        phoneModel.rotation.x = -Math.PI / 2;
+
+        scene.add(phoneGroup);
+
+        // Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+        const dirLight = new THREE.DirectionalLight(0x00ffb4, 0.8);
+        dirLight.position.set(2, 3, 2);
+        scene.add(dirLight);
+        const dirLight2 = new THREE.DirectionalLight(0xff3cac, 0.4);
+        dirLight2.position.set(-2, -1, -2);
+        scene.add(dirLight2);
+
+        // Trail — last N positions
+        const TRAIL_LEN = 40;
+        const trailPositions = new Float32Array(TRAIL_LEN * 3);
+        const trailGeo = new THREE.BufferGeometry();
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+        trailGeo.setDrawRange(0, 0);
+        const trailMat = new THREE.LineBasicMaterial({ color: 0xff3cac, transparent: true, opacity: 0.5 });
+        const trailLine = new THREE.Line(trailGeo, trailMat);
+        scene.add(trailLine);
+        let trailCount = 0;
+
+        // ── Sensor state ────────────────────────────────────────────
+        let alpha = 0, beta = 0, gamma = 0;
+        let ax = 0, ay = 0, az = 0;
+        let force = 0;
+        let isMobileRole = false;
+
+        const euler = new THREE.Euler();
+        const q = new THREE.Quaternion();
+
+        // Motion history for gesture detection
+        const motionHistory = [];
+        const HISTORY_SIZE = 60; // ~1 second at 60hz
+        let shakeCooldown = false;
+        let peakForce = 0;
+
+        // ── UI refs ──────────────────────────────────────────────────
+        const barAlpha = document.getElementById('bar-alpha');
+        const barBeta = document.getElementById('bar-beta');
+        const barGamma = document.getElementById('bar-gamma');
+        const valAlpha = document.getElementById('val-alpha');
+        const valBeta = document.getElementById('val-beta');
+        const valGamma = document.getElementById('val-gamma');
+        const barAx = document.getElementById('bar-ax');
+        const barAy = document.getElementById('bar-ay');
+        const barAz = document.getElementById('bar-az');
+        const valAx = document.getElementById('val-ax');
+        const valAy = document.getElementById('val-ay');
+        const valAz = document.getElementById('val-az');
+        const forceBar = document.getElementById('force-bar');
+        const forceVal = document.getElementById('force-val');
+        const logList = document.getElementById('log-list');
+        const shakeFlash = document.getElementById('shake-flash');
+        const gestureDisplay = document.getElementById('gesture-display');
+
+        function setBar(el, value, min, max) {
+            const pct = ((value - min) / (max - min)) * 100;
+            const clamped = Math.max(0, Math.min(100, pct));
+            el.style.width = clamped + '%';
+            el.style.left = '0';
+        }
+
+        function logEvent(text, color = '#00ffb4') {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.style.color = color;
+            const now = new Date();
+            const time = `${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
+            entry.textContent = `[${time}] ${text}`;
+            logList.prepend(entry);
+            // Remove old entries
+            while (logList.children.length > 3) logList.removeChild(logList.lastChild);
+        }
+
+        function showGesture(text, color) {
+            gestureDisplay.textContent = text;
+            gestureDisplay.style.color = color;
+            gestureDisplay.style.textShadow = `0 0 40px ${color}`;
+            gestureDisplay.style.opacity = '1';
+            setTimeout(() => { gestureDisplay.style.opacity = '0'; }, 800);
+        }
+
+        // ── Gesture detection ────────────────────────────────────────
+
+        function analyzeMotion(samples) {
+            // Peak force in window
+            const peak = Math.max(...samples.map(s => s.f));
+
+            // Direction: check if movement is predominantly in one axis
+            const avgX = samples.reduce((s, m) => s + m.x, 0) / samples.length;
+            const avgY = samples.reduce((s, m) => s + m.y, 0) / samples.length;
+            const avgZ = samples.reduce((s, m) => s + m.z, 0) / samples.length;
+
+            // Direction changes in Z (forward/back swing)
+            let zChanges = 0;
+            for (let i = 1; i < samples.length; i++) {
+                if (Math.sign(samples[i].z) !== Math.sign(samples[i - 1].z) && Math.abs(samples[i].z) > 3) {
+                    zChanges++;
+                }
+            }
+
+            return { peak, avgX, avgY, avgZ, zChanges };
+        }
+
+        function processMotionData() {
+            motionHistory.push({ x: ax, y: ay, z: az, f: force, t: Date.now() });
+            if (motionHistory.length > HISTORY_SIZE) motionHistory.shift();
+            peakForce = Math.max(peakForce, force);
+            detectGestures();
+        }
+
+        function detectGestures() {
+            if (motionHistory.length < 15) return;
+
+            const recent = motionHistory.slice(-20);
+            const { peak, avgX, avgY, avgZ, zChanges } = analyzeMotion(recent);
+
+            // SHAKE — high force, multiple direction changes
+            if (peak > 30 && !shakeCooldown) {
+                shakeCooldown = true;
+                setTimeout(() => shakeCooldown = false, 1000);
+
+                const potencia = Math.min(100, Math.round((peak / 60) * 100));
+                logEvent(`GOLPE DETECTADO — fuerza: ${peak.toFixed(1)} m/s² — potencia: ${potencia}%`, '#ff3cac');
+                showGesture('⚡ GOLPE', '#ff3cac');
+
+                shakeFlash.style.opacity = '0.15';
+                setTimeout(() => shakeFlash.style.opacity = '0', 150);
+            }
+
+            // TILT FORWARD — inclinar hacia adelante rápido
+            if (Math.abs(avgZ) > 8 && peak > 8 && peak < 25 && !shakeCooldown) {
+                shakeCooldown = true;
+                setTimeout(() => shakeCooldown = false, 800);
+                const dir = avgZ > 0 ? '→ ADELANTE' : '← ATRÁS';
+                logEvent(`BARRIDO ${dir} — ${peak.toFixed(1)} m/s²`, '#3c9eff');
+                showGesture(dir, '#3c9eff');
+            }
+        }
+
+        // ── Sensor listeners ─────────────────────────────────────────
+        window.addEventListener('deviceorientation', (e) => {
+            if (!isMobileRole) return;
+            alpha = e.alpha || 0;
+            beta = e.beta || 0;
+            gamma = e.gamma || 0;
+            
+            socket.emit('motion_data', { type: 'orientation', alpha, beta, gamma });
+        });
+
+        window.addEventListener('devicemotion', (e) => {
+            if (!isMobileRole) return;
+            const acc = e.accelerationIncludingGravity;
+            if (!acc) return;
+            ax = acc.x || 0;
+            ay = acc.y || 0;
+            az = acc.z || 0;
+            force = Math.sqrt(ax * ax + ay * ay + az * az);
+
+            processMotionData();
+            
+            socket.emit('motion_data', { type: 'motion', ax, ay, az, force });
+        });
+        
+        // ── Socket listener (para la PC) ─────────────────────────────
+        socket.on('motion_data', (data) => {
+            if (isMobileRole) return; // Móvil no procesa datos recibidos de otro móvil
+            
+            if (data.type === 'orientation') {
+                alpha = data.alpha;
+                beta = data.beta;
+                gamma = data.gamma;
+            } else if (data.type === 'motion') {
+                ax = data.ax;
+                ay = data.ay;
+                az = data.az;
+                force = data.force;
+                processMotionData(); // Ejecuta lógica de gestos en la PC también
+            }
+        });
+
+        // ── Render loop ──────────────────────────────────────────────
+        let frame = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+            frame++;
+
+            // Apply orientation to phoneGroup
+            // Mapeo corregido: beta=X, alpha=Y, gamma=Z
+            euler.set(
+                THREE.MathUtils.degToRad(beta),
+                THREE.MathUtils.degToRad(alpha),
+                THREE.MathUtils.degToRad(-gamma),
+                'YXZ'
+            );
+            q.setFromEuler(euler);
+            phoneGroup.quaternion.slerp(q, 0.15); // smooth
+
+            // Trail — usamos la punta del modelo (que ahora está rotado)
+            // La punta está en Y=0.7 en el espacio LOCAL del modelo
+            const tip = new THREE.Vector3(0, 0.7, 0.05);
+            tip.applyMatrix4(phoneModel.matrixWorld); // Usamos matrixWorld para considerar la rotación interna del modelo
+
+            const offset = (trailCount % TRAIL_LEN) * 3;
+            trailPositions[offset] = tip.x;
+            trailPositions[offset + 1] = tip.y;
+            trailPositions[offset + 2] = tip.z;
+            trailCount++;
+
+            const drawCount = Math.min(trailCount, TRAIL_LEN);
+            trailGeo.setDrawRange(0, drawCount);
+            trailGeo.attributes.position.needsUpdate = true;
+
+            // Subtle float animation
+            phoneGroup.position.y = Math.sin(frame * 0.02) * 0.03;
+
+            // Screen glow pulse on force
+            const normalizedForce = Math.min(1, force / 40);
+            screenMat.opacity = 0.05 + normalizedForce * 0.3;
+            edgeMat.opacity = 0.2 + normalizedForce * 0.6;
+
+            // Update HUD every 3 frames (no need for 60fps UI)
+            if (frame % 3 === 0) {
+                setBar(barAlpha, alpha, 0, 360);
+                setBar(barBeta, beta, -180, 180);
+                setBar(barGamma, gamma, -90, 90);
+                valAlpha.textContent = alpha.toFixed(0) + '°';
+                valBeta.textContent = beta.toFixed(0) + '°';
+                valGamma.textContent = gamma.toFixed(0) + '°';
+
+                const maxAcc = 20;
+                setBar(barAx, ax, -maxAcc, maxAcc);
+                setBar(barAy, ay, -maxAcc, maxAcc);
+                setBar(barAz, az, -maxAcc, maxAcc);
+                valAx.textContent = ax.toFixed(1);
+                valAy.textContent = ay.toFixed(1);
+                valAz.textContent = az.toFixed(1);
+
+                forceBar.style.width = Math.min(100, (force / 50) * 100) + '%';
+                forceVal.textContent = force.toFixed(1) + ' m/s²';
+
+                // Color force bar based on intensity
+                if (force > 30) {
+                    forceBar.style.background = 'linear-gradient(to right, #ff3cac, #ff0000)';
+                    forceBar.style.boxShadow = '0 0 12px #ff3cac';
+                } else if (force > 15) {
+                    forceBar.style.background = 'linear-gradient(to right, #ffaa00, #ff3cac)';
+                    forceBar.style.boxShadow = '0 0 8px #ffaa00';
+                } else {
+                    forceBar.style.background = 'linear-gradient(to right, #00ffb4, #3c9eff)';
+                    forceBar.style.boxShadow = '0 0 8px #00ffb4';
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // ── Start buttons ─────────────────────────────────────────────
+        document.getElementById('btn-pc').addEventListener('click', () => {
+            isMobileRole = false;
+            document.getElementById('start-overlay').style.display = 'none';
+            animate();
+            logEvent('PC iniciada. Esperando datos del móvil...', '#3c9eff');
+        });
+
+        document.getElementById('btn-mobile').addEventListener('click', async () => {
+            isMobileRole = true;
+            // iOS permission
+            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                try {
+                    const state = await DeviceMotionEvent.requestPermission();
+                    if (state !== 'granted') {
+                        alert('Permiso de movimiento denegado');
+                        return;
+                    }
+                    await DeviceOrientationEvent.requestPermission();
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+
+            document.getElementById('start-overlay').style.display = 'none';
+            animate();
+            logEvent('Sensores activos. Enviando datos...', '#00ffb4');
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Illuminated Header Effect</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/annyang/2.6.1/annyang.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0a0a0a;
+            color: #ffffff;
+            overflow-x: hidden;
+        }
+
+        .glow-overlay {
+            position: absolute;
+            top: -450px; /* Focus moved right to the top */
+            left: 50%;
+            transform: translate3d(-50%, 0, 0);
+            width: 200%; 
+            height: 900px; 
+            background: radial-gradient(circle at center,
+                    rgba(59, 130, 246, 0.9) 0%,
+                    rgba(147, 51, 234, 0.5) 25%,
+                    rgba(147, 51, 234, 0.2) 50%,
+                    transparent 75%);
+            filter: blur(120px);
+            opacity: 0;
+            transition: opacity 1.5s cubic-bezier(0.4, 0, 0.2, 1), transform 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            z-index: 0;
+            /* Fix GPU flickering on mobile/WebKit */
+            will-change: transform, opacity;
+            -webkit-backface-visibility: hidden;
+            backface-visibility: hidden;
+        }
+
+        /* Ambient body glow */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at top, rgba(59, 130, 246, 0.05) 0%, transparent 70%);
+            opacity: 0;
+            transition: opacity 1.5s ease;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .is-illuminated body::before {
+            opacity: 1;
+        }
+
+        /* Active State */
+        .is-illuminated .glow-overlay {
+            opacity: 1;
+            transform: translate3d(-50%, 60px, 0);
+        }
+
+        /* Button Pulse */
+        .btn-glow {
+            box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+            transition: all 0.3s ease;
+        }
+
+        .is-illuminated .btn-glow {
+            box-shadow: 0 0 40px 5px rgba(59, 130, 246, 0.5);
+            background-color: #3b82f6;
+        }
+
+        /* Mic Status Indicator */
+        #mic-status {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            pointer-events: none;
+            z-index: 100;
+            transition: opacity 0.4s ease, visibility 0.4s ease;
+            opacity: 0;
+            visibility: hidden;
+            text-align: center;
+        }
+        #mic-label {
+            font-size: 2rem;
+            font-weight: 300;
+            letter-spacing: 0.1em;
+            color: rgba(255, 255, 255, 0.8);
+            text-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+        }
+        #mic-status.listening {
+            opacity: 0; /* Keep it invisible while listening */
+            visibility: hidden;
+        }
+        #mic-status.error {
+            opacity: 1;
+            visibility: visible;
+            color: #f87171;
+        }
+        #mic-status.heard {
+            opacity: 1;
+            visibility: visible;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.7); }
+        }
+    </style>
+</head>
+
+<body class="min-h-screen bg-black overflow-hidden" onclick="handleScreenTap()">
+
+    <!-- The Glow Background -->
+    <div id="glow" class="glow-overlay"></div>
+
+    <div id="mic-status">
+        <span id="mic-label"></span>
+    </div>
+
+    <footer class="fixed bottom-8 w-full text-center text-zinc-900 text-[10px] tracking-widest uppercase pointer-events-none opacity-20">
+        Tap once to awaken
+    </footer>
+
+    <script>
+        let illuminated = false;
+        let spellTimeout;
+        let annyangStarted = false;
+
+        function setMicStatus(state, text) {
+            const el = document.getElementById('mic-status');
+            const label = document.getElementById('mic-label');
+            el.classList.remove('listening', 'error', 'heard');
+            if (state) el.classList.add(state);
+            label.textContent = text;
+        }
+
+        function handleScreenTap() {
+            if (!annyangStarted) {
+                startVoiceRecognition();
+                document.querySelector('footer').style.opacity = '0';
+            } else {
+                triggerIllumination();
+            }
+        }
+
+        function triggerIllumination() {
+            const body = document.body;
+
+            body.classList.add('is-illuminated');
+            illuminated = true;
+
+            if (spellTimeout) clearTimeout(spellTimeout);
+
+            spellTimeout = setTimeout(() => {
+                body.classList.remove('is-illuminated');
+                illuminated = false;
+                spellTimeout = null;
+                if (annyangStarted) {
+                    setMicStatus('listening', '');
+                }
+            }, 2000);
+        }
+
+        function castExpelliarmus() {
+            console.log('✨ Expelliarmus cast!');
+            setMicStatus('heard', 'Expelliarmus!');
+            triggerIllumination();
+        }
+
+        function startVoiceRecognition() {
+            if (!annyang) {
+                console.error('annyang not loaded.');
+                setMicStatus('error', '');
+                return;
+            }
+
+            if (annyangStarted) return; // already running
+            annyangStarted = true;
+
+            // Clear any old commands and set fresh ones
+            annyang.removeCommands();
+            annyang.addCommands({
+                'expelliarmus': castExpelliarmus
+            });
+
+            annyang.setLanguage('en-US');
+
+            // ── Debug callbacks ──────────────────────────────────────
+            annyang.addCallback('start', () => {
+                console.log('🎙️ Annyang started listening');
+                setMicStatus('listening', '');
+            });
+
+            annyang.addCallback('end', () => {
+                console.log('🔇 Annyang stopped');
+                if (illuminated) {
+                    setMicStatus('listening', '');
+                } else {
+                    setMicStatus('', '');
+                }
+            });
+
+            annyang.addCallback('result', (phrases) => {
+                console.log('🗣️ Heard:', phrases);
+                setMicStatus('heard', phrases[0]);
+                setTimeout(() => {
+                    if (illuminated) setMicStatus('listening', '');
+                }, 1500);
+            });
+
+            annyang.addCallback('errorPermissionBlocked', () => {
+                console.error('🚫 Microphone permission BLOCKED by browser.');
+                setMicStatus('error', '');
+            });
+
+            annyang.addCallback('errorPermissionDenied', () => {
+                console.error('🚫 Microphone permission DENIED by user.');
+                setMicStatus('error', '');
+            });
+
+            annyang.addCallback('errorNetwork', () => {
+                console.error('🌐 Network error in Speech API.');
+                setMicStatus('error', '');
+            });
+            // ─────────────────────────────────────────────────────────
+
+            annyang.start({ autoRestart: true, continuous: true });
+            console.log('Annyang initialized.');
+        }
+
+        function stopVoiceRecognition() {
+            if (annyang && annyangStarted) {
+                annyang.abort();
+                annyangStarted = false;
+                setMicStatus('', '');
+                console.log('🔇 Annyang aborted.');
+            }
+        }
+    </script>
+</body>
+
+</html>

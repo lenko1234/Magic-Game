@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic Game - Santuario</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            background-color: #000000;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .glow-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.8);
+            width: 150vw; 
+            height: 150vw; 
+            border-radius: 50%;
+            filter: blur(150px);
+            opacity: 0;
+            /* Default background, overwritten by JS */
+            background: radial-gradient(circle at center, rgba(255,255,255,0.8) 0%, transparent 60%);
+            transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1), transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            will-change: transform, opacity;
+        }
+
+        .is-illuminated .glow-overlay {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }
+
+        #error-indicator {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            font-family: sans-serif;
+            font-size: 0.8rem;
+            color: rgba(239, 68, 68, 0.8); /* Red/Orange to indicate error */
+            opacity: 0; /* Hidden by default */
+            transition: opacity 0.3s;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+        }
+
+        /* Dual Health Bars */
+        #health-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            display: flex;
+            gap: 4px;
+            z-index: 1000;
+        }
+        .hp-bar-bg {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .hp-fill {
+            width: 100%;
+            height: 100%;
+            background: #22c55e;
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.3);
+        }
+    </style>
+</head>
+<body class="bg-black">
+
+    <div id="glow" class="glow-overlay"></div>
+
+    <div id="error-indicator">
+        <div class="dot"></div>
+        <span id="error-text">Desconectado</span>
+    </div>
+
+    <div id="health-container">
+        <div class="hp-bar-bg"><div id="hp-p1" class="hp-fill"></div></div>
+        <div class="hp-bar-bg"><div id="hp-p2" class="hp-fill"></div></div>
+    </div>
+
+    <script>
+        const errorIndicator = document.getElementById('error-indicator');
+        const errorText = document.getElementById('error-text');
+
+        if (typeof io === 'undefined') {
+            errorText.innerText = 'Error: Socket.io no cargado. Usa HTTPS.';
+            errorIndicator.style.opacity = '1';
+        } else {
+            const socket = io();
+
+            socket.on('connect', () => {
+                // Hide error indicator when connected
+                errorIndicator.style.opacity = '0';
+            });
+
+            socket.on('disconnect', () => {
+                errorText.innerText = 'Desconectado del servidor';
+                errorIndicator.style.opacity = '1';
+            });
+
+            socket.on('connect_error', () => {
+                errorText.innerText = 'Error de conexión (Revisa HTTPS)';
+                errorIndicator.style.opacity = '1';
+            });
+
+            const spellColors = {
+                'expelliarmus': 'radial-gradient(circle at center, rgba(168, 85, 247, 0.9) 0%, rgba(126, 34, 206, 0.4) 40%, transparent 70%)',
+                'accio': 'radial-gradient(circle at center, rgba(255, 255, 255, 1) 0%, rgba(200, 200, 200, 0.4) 40%, transparent 70%)',
+                'desmaius': 'radial-gradient(circle at center, rgba(239, 68, 68, 0.9) 0%, rgba(185, 28, 28, 0.4) 40%, transparent 70%)',
+                'protego': 'radial-gradient(circle at center, rgba(6, 182, 212, 0.9) 0%, rgba(8, 145, 178, 0.4) 40%, transparent 70%)'
+            };
+
+            const glow = document.getElementById('glow');
+            let resetTimeout;
+            let healthP1 = 100;
+            let healthP2 = 100;
+
+            socket.on('recibir-ataque', (data) => {
+                const playerNum = data.jugador || 2;
+                const tipo = data.tipo || 'expelliarmus';
+
+                // Update Health (Only if it's not a defensive spell, with 800ms delay)
+                if (tipo !== 'protego') {
+                    setTimeout(() => {
+                        // Damage calculation
+                        let damage = 10;
+                        if (tipo === 'desmaius') damage = 25;
+                        if (tipo === 'accio') damage = 5;
+
+                        if (playerNum === 1) {
+                            healthP2 = Math.max(0, healthP2 - damage);
+                            document.getElementById('hp-p2').style.width = healthP2 + '%';
+                            if (healthP2 < 30) document.getElementById('hp-p2').style.background = '#ef4444';
+                        } else {
+                            healthP1 = Math.max(0, healthP1 - damage);
+                            document.getElementById('hp-p1').style.width = healthP1 + '%';
+                            if (healthP1 < 30) document.getElementById('hp-p1').style.background = '#ef4444';
+                        }
+                    }, 800);
+                }
+
+                // Posicionar según el jugador (Jugador 1 Izquierda, Jugador 2 Derecha)
+                glow.style.left = (playerNum === 1) ? '25%' : '75%';
+                
+                // Set Color
+                glow.style.background = spellColors[tipo] || spellColors['expelliarmus'];
+
+                // Trigger Illumination
+                document.body.classList.add('is-illuminated');
+
+                // Screen Shake Effect
+                document.body.style.transform = 'translate(5px, 5px)';
+                setTimeout(() => document.body.style.transform = 'translate(-5px, -5px)', 50);
+                setTimeout(() => document.body.style.transform = 'translate(5px, -5px)', 100);
+                setTimeout(() => document.body.style.transform = 'translate(0, 0)', 150);
+
+                if (resetTimeout) clearTimeout(resetTimeout);
+                
+                // Fade out after impact
+                resetTimeout = setTimeout(() => {
+                    document.body.classList.remove('is-illuminated');
+                }, 800); 
+            });
+        }
+    </script>
+</body>
+</html>
