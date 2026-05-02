@@ -106,6 +106,44 @@
             z-index: 100;
             letter-spacing: 0.05em;
         }
+
+        /* ---- END SCREEN ---- */
+        #end-screen {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            background: #050505;
+        }
+        #end-ui {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 210;
+            text-align: center;
+            pointer-events: none;
+        }
+        #end-status-text {
+            font-size: 3.5rem;
+            font-weight: 900;
+            letter-spacing: 12px;
+            text-shadow: 0 0 30px currentColor;
+            margin-bottom: 1rem;
+        }
+        #btn-restart {
+            pointer-events: auto;
+            margin-top: 2rem;
+            padding: 0.8rem 2rem;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 50px;
+            color: white;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            backdrop-filter: blur(5px);
+        }
     </style>
 </head>
 
@@ -178,11 +216,22 @@
 </div>
 
 <!-- ================================================================ -->
+<!--  END SCREEN                                                        -->
+<!-- ================================================================ -->
+<div id="end-screen">
+    <div id="end-ui">
+        <h1 id="end-status-text">VICTORIA</h1>
+        <button id="btn-restart" onclick="location.reload()">Nuevo Duelo</button>
+    </div>
+</div>
+
+<!-- ================================================================ -->
 <!--  SCRIPTS                                                           -->
 <!-- ================================================================ -->
-<script src="/socket.io/socket.io.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
 <script>
 
 // ----------------------------------------------------------------
@@ -323,6 +372,12 @@ function applyDamage(tipo) {
     document.getElementById('health-bar').style.width = health + '%';
     if (health < 30) document.getElementById('health-bar').style.background = '#ef4444';
     if (window.navigator.vibrate) window.navigator.vibrate(100);
+
+    if (health <= 0) {
+        showEndScreen('defeat');
+        sendP2P({ type: 'game-over', winner: (playerNum === 1 ? 2 : 1) });
+        if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'game-over', winner: (playerNum === 1 ? 2 : 1) });
+    }
 }
 
 function receiveAttack(data) {
@@ -519,6 +574,13 @@ function handleP2PMessage(msg) {
                 document.getElementById('health-bar').style.width = health + '%';
             }
             break;
+        case 'game-over':
+            if (msg.winner === playerNum) {
+                showEndScreen('victory');
+            } else {
+                showEndScreen('defeat');
+            }
+            break;
     }
 }
 
@@ -684,6 +746,86 @@ function joinRoom(roomId) {
 // Auto-unirse si viene de un QR
 const roomFromUrl = new URLSearchParams(window.location.search).get('room');
 if (roomFromUrl) joinRoom(roomFromUrl);
+
+// ----------------------------------------------------------------
+// END SCREEN ENGINE (Three.js)
+// ----------------------------------------------------------------
+let endScene, endCamera, endRenderer, endParticleSystem;
+const particleCount = 5000;
+let endState = 'victory';
+
+const endThemes = {
+    victory: { color: 0xffd700, bg: 0x0a0a00, speed: 0.02,  direction: 1,  textColor: '#ffd700', text: 'VICTORIA' },
+    defeat:  { color: 0x6a0dad, bg: 0x050005, speed: 0.015, direction: -1, textColor: '#9d4edd', text: 'DERROTA' }
+};
+
+function showEndScreen(state) {
+    endState = state;
+    document.getElementById('combat').style.display = 'none';
+    document.getElementById('end-screen').style.display = 'block';
+    
+    const theme = endThemes[state];
+    const textEl = document.getElementById('end-status-text');
+    textEl.innerText = theme.text;
+    textEl.style.color = theme.textColor;
+
+    initEndScene(theme);
+}
+
+function initEndScene(theme) {
+    endScene = new THREE.Scene();
+    endScene.background = new THREE.Color(theme.bg);
+
+    endCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    endCamera.position.z = 5;
+
+    endRenderer = new THREE.WebGLRenderer({ antialias: true });
+    endRenderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('end-screen').appendChild(endRenderer.domElement);
+
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount * 3; i++) {
+        positions[i] = (Math.random() - 0.5) * 10;
+    }
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    
+    const material = new THREE.PointsMaterial({
+        size: 0.05,
+        color: theme.color,
+        transparent: true,
+        opacity: 0.8,
+        blending: THREE.AdditiveBlending
+    });
+
+    endParticleSystem = new THREE.Points(geometry, material);
+    endScene.add(endParticleSystem);
+
+    animateEndScene();
+}
+
+function animateEndScene() {
+    if (document.getElementById('end-screen').style.display === 'none') return;
+    requestAnimationFrame(animateEndScene);
+
+    const positions = endParticleSystem.geometry.attributes.position.array;
+    const theme = endThemes[endState];
+
+    for (let i = 0; i < particleCount; i++) {
+        positions[i * 3 + 1] += theme.speed * theme.direction;
+        const x = positions[i * 3];
+        const z = positions[i * 3 + 2];
+        positions[i * 3] = x * Math.cos(0.002) - z * Math.sin(0.002);
+        positions[i * 3 + 2] = x * Math.sin(0.002) + z * Math.cos(0.002);
+
+        if (theme.direction === 1 && positions[i * 3 + 1] > 5) positions[i * 3 + 1] = -5;
+        else if (theme.direction === -1 && positions[i * 3 + 1] < -5) positions[i * 3 + 1] = 5;
+    }
+
+    endParticleSystem.geometry.attributes.position.needsUpdate = true;
+    endParticleSystem.rotation.y += 0.001;
+    endRenderer.render(endScene, endCamera);
+}
 
 </script>
 </body>
