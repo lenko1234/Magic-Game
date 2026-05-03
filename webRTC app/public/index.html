@@ -78,6 +78,28 @@
         }
         #spell-status.visible { opacity: 1; }
 
+        /* ---- CLASH UI ---- */
+        #clash-scene {
+            display: none; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 15%;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 50;
+            background: rgba(6, 4, 15, 0.85); backdrop-filter: blur(5px);
+        }
+        #clash-scene.visible { display: flex; }
+        canvas#bolt { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+        #bar-wrap {
+            width: 80%; max-width: 400px; height: 14px; background: rgba(15,10,26,0.8); border-radius: 7px;
+            border: 1px solid #1e1035; overflow: hidden; position: relative; z-index: 10;
+        }
+        #bar-fill {
+            height: 100%; border-radius: 7px;
+            background: linear-gradient(90deg, #7c3aed, #a855f7);
+            transition: width 0.15s, background 0.2s; width: 100%;
+        }
+        #clash-msg {
+            position: relative; z-index: 10; font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase;
+            color: #a855f7; margin-top: 20px; font-weight: bold; text-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+        }
+
         .btn-spell { transition: transform 0.1s ease; }
         .btn-spell:active { transform: scale(0.9); }
 
@@ -200,6 +222,13 @@
 
     <div id="spell-status">
         <span id="spell-label"></span>
+    </div>
+
+    <!-- CLASH UI -->
+    <div id="clash-scene">
+        <canvas id="bolt"></canvas>
+        <div id="bar-wrap"><div id="bar-fill"></div></div>
+        <div id="clash-msg">¡MANTÉN FIRME!</div>
     </div>
 
     <div id="health-bar-container">
@@ -389,6 +418,133 @@ class LiquidBar {
     }
 }
 
+class ClashLightning {
+    constructor() {
+        this.canvas = document.getElementById('bolt');
+        if (!this.canvas) return;
+        this.ctx = this.canvas.getContext('2d');
+        this.scene = document.getElementById('clash-scene');
+        this.W = 0; this.H = 0;
+        this.stress = 0; this.targetStress = 0;
+        this.sparks = [];
+        this.animFrame = null;
+        this.active = false;
+        
+        this.resize = this.resize.bind(this);
+        window.addEventListener('resize', this.resize);
+        this.resize();
+    }
+    resize() {
+        if (!this.scene) return;
+        this.W = window.innerWidth;
+        this.H = window.innerHeight;
+        this.canvas.width = this.W;
+        this.canvas.height = this.H;
+    }
+    boltSegs(x1,y1,x2,y2,rough,depth) {
+        if (depth > 6) return [{x1,y1,x2,y2}];
+        const mx=(x1+x2)/2+(Math.random()-0.5)*rough;
+        const my=(y1+y2)/2+(Math.random()-0.5)*rough;
+        return [...this.boltSegs(x1,y1,mx,my,rough*0.6,depth+1),...this.boltSegs(mx,my,x2,y2,rough*0.6,depth+1)];
+    }
+    generateBolt() {
+        const cx = this.W / 2;
+        const spread = 20 + this.stress * 100;
+        const rough = 15 + this.stress * 60;
+        
+        const sx = cx + (Math.random() - 0.5) * spread * 0.5;
+        const ex = cx + (Math.random() - 0.5) * spread;
+        
+        const color = this.stress > 0.6 ? `rgba(255,${Math.floor(80 - this.stress * 60)},${Math.floor(80 - this.stress * 60)},`
+            : this.stress > 0.3 ? `rgba(220,${Math.floor(160 - this.stress * 100)},255,` : `rgba(180,130,255,`;
+            
+        // El rayo va de abajo (this.H) hacia arriba (0)
+        return { 
+            segs: this.boltSegs(sx, this.H, ex, 0, rough, 0), 
+            alpha: 0.6 + this.stress * 0.4, 
+            width: 3 + this.stress * 8, 
+            color 
+        };
+    }
+    addSparks(n) {
+        const cx = this.W / 2 + (Math.random() - 0.5) * 60 * this.stress;
+        // Chispas salen de varias partes del rayo (más o menos en la mitad)
+        const cy = this.H * Math.random();
+        for (let i=0; i<n; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const sp = (1 + Math.random() * 3) * (0.5 + this.stress * 1.5);
+            this.sparks.push({x:cx, y:cy, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-1, life:1, r:1+Math.random()*2, color:this.stress>0.5?'#f87171':'#c084fc'});
+        }
+    }
+    setStress(val) {
+        this.targetStress = Math.min(1, val / 6);
+    }
+    updateTimeBar(progress) {
+        const fill = document.getElementById('bar-fill');
+        if (fill) fill.style.width = Math.max(0, (100 - progress * 100)) + '%';
+    }
+    draw() {
+        if (!this.active) return;
+        this.stress += (this.targetStress - this.stress) * 0.15;
+        if (Math.abs(this.targetStress - this.stress) < 0.001) this.stress = this.targetStress;
+        this.targetStress *= 0.97;
+
+        this.ctx.clearRect(0,0,this.W,this.H);
+
+        // Generar un solo rayo constante por frame
+        const b = this.generateBolt();
+        
+        // Glow exterior
+        this.ctx.lineWidth = b.width * 3;
+        for (const s of b.segs) {
+            this.ctx.beginPath(); this.ctx.moveTo(s.x1, s.y1); this.ctx.lineTo(s.x2, s.y2);
+            this.ctx.strokeStyle = b.color + (b.alpha * 0.3) + ')'; this.ctx.stroke();
+        }
+        // Núcleo brillante
+        this.ctx.lineWidth = b.width;
+        for (const s of b.segs) {
+            this.ctx.beginPath(); this.ctx.moveTo(s.x1, s.y1); this.ctx.lineTo(s.x2, s.y2);
+            this.ctx.strokeStyle = '#ffffff'; 
+            this.ctx.stroke();
+            // Segundo trazo para darle el color primario encima del blanco
+            this.ctx.strokeStyle = b.color + b.alpha + ')'; 
+            this.ctx.stroke();
+        }
+
+        if (this.stress > 0.3) this.addSparks(Math.floor(1 + this.stress * 4));
+
+        for (const s of this.sparks) {
+            s.x += s.vx; s.y += s.vy; s.vy += 0.12; s.life -= 0.05;
+            this.ctx.beginPath(); this.ctx.arc(s.x, s.y, Math.max(0.1, s.r * s.life), 0, Math.PI * 2);
+            this.ctx.fillStyle = s.color; this.ctx.globalAlpha = s.life; this.ctx.fill(); this.ctx.globalAlpha = 1;
+        }
+        this.sparks = this.sparks.filter(s => s.life > 0);
+
+        const fill = document.getElementById('bar-fill');
+        if (fill) fill.style.background = this.stress > 0.6 ? 'linear-gradient(90deg,#7f1d1d,#ef4444)' : this.stress > 0.3 ? 'linear-gradient(90deg,#7c3aed,#f97316)' : 'linear-gradient(90deg,#7c3aed,#a855f7)';
+
+        const msg = document.getElementById('clash-msg');
+        if (msg) msg.textContent = this.stress < 0.05 ? 'quieto...' : this.stress < 0.3 ? 'cuidado...' : this.stress < 0.6 ? '¡temblando!' : '¡fuera de control!';
+
+        this.animFrame = requestAnimationFrame(() => this.draw());
+    }
+    start() {
+        if (this.active) return;
+        this.active = true;
+        this.scene.classList.add('visible');
+        this.resize();
+        this.draw();
+    }
+    stop() {
+        this.active = false;
+        this.scene.classList.remove('visible');
+        if (this.animFrame) cancelAnimationFrame(this.animFrame);
+        this.sparks = [];
+        this.ctx.clearRect(0,0,this.W,this.H);
+    }
+}
+
+let myClashLightning;
 let myHealthBar;
 
 let playerNum = null;        // 1 = Host, 2 = Client
@@ -555,7 +711,7 @@ function receiveAttack(data) {
     if (data.tipo === 'protego') return;
 
     // ¿Choque? Solo el Host decide (para evitar doble procesamiento)
-    if (isHost && pendingMySpell && !isInClash) {
+    if (isHost && pendingMySpell && !isInClash && offensiveSpells.includes(pendingMySpell.tipo)) {
         const elapsed = Date.now() - pendingMySpell.timestamp;
         if (elapsed < CLASH_WINDOW_MS) {
             console.log(`⚡ CHOQUE detectado! (${elapsed}ms) ${pendingMySpell.tipo} vs ${data.tipo}`);
@@ -631,17 +787,39 @@ function triggerSpell(tipo, event) {
 // ----------------------------------------------------------------
 // CLASH MECHANIC (copiado del legacy)
 // ----------------------------------------------------------------
+let clashStartTime = 0;
+const CLASH_DURATION_MS = 8000;
+
 function startClash() {
     isInClash = true;
     spellCooldown = true;
-    setSpellStatus('⚡ ¡MANTÉ FIRME! ⚡');
+    setSpellStatus(''); // Ocultar el texto base
     showClashGlow();
+
+    myMotionBuffer = [];
+    rivalMotionBuffer = [];
+
+    clashStartTime = Date.now();
+    if (!myClashLightning) myClashLightning = new ClashLightning();
+    myClashLightning.start();
 
     // Solo el Host maneja el temporizador del choque
     if (isHost) {
         setTimeout(() => {
-            // Decidir ganador al azar o por inestabilidad acumulada
-            const loser = Math.random() > 0.5 ? 1 : 2;
+            // Sumar la inestabilidad de las últimas muestras
+            const myTotal = myMotionBuffer.reduce((a, b) => a + b, 0);
+            const rivalTotal = rivalMotionBuffer.reduce((a, b) => a + b, 0);
+            
+            // El que más se mueve (mayor inestabilidad) pierde
+            let loser;
+            if (myTotal > rivalTotal) {
+                loser = 1; // Host pierde
+            } else if (rivalTotal > myTotal) {
+                loser = 2; // Cliente pierde
+            } else {
+                loser = Math.random() > 0.5 ? 1 : 2; // Empate -> azar
+            }
+
             const endMsg = { type: 'clash-end', loser, damage: 30 };
             
             // Avisar al cliente
@@ -650,12 +828,18 @@ function startClash() {
             socket.emit('game-event', { roomId: currentRoomId, event: 'clash-end', loser, damage: 30 });
             // Procesar localmente
             endClash(endMsg);
-        }, 8000); // 8 segundos de choque
+        }, CLASH_DURATION_MS);
     }
 
     motionDebugInterval = setInterval(() => {
-        if (isInClash) setSpellStatus(`⚡ FIRME ⚡  mov: ${lastMotionValue.toFixed(1)}`);
-    }, 150);
+        if (isInClash) {
+            if (myClashLightning) {
+                myClashLightning.setStress(lastMotionValue);
+                const progress = Math.min(1, (Date.now() - clashStartTime) / CLASH_DURATION_MS);
+                myClashLightning.updateTimeBar(progress);
+            }
+        }
+    }, 100);
 }
 
 function endClash(data) {
@@ -663,6 +847,8 @@ function endClash(data) {
     spellCooldown = false;
     stopClashMotion();
     document.getElementById('combat').classList.remove('is-illuminated');
+
+    if (myClashLightning) myClashLightning.stop();
 
     if (data.loser === playerNum) {
         applyDamage('desmaius');
@@ -714,6 +900,13 @@ function initGlobalMotion() {
             if (!acc) return;
             const valor = Math.abs(acc.x || 0) + Math.abs(acc.y || 0) + Math.abs(acc.z || 0);
             lastMotionValue = valor;
+            
+            // Si soy el Host, acumulo mi propio movimiento
+            if (isHost) {
+                myMotionBuffer.push(valor);
+                if (myMotionBuffer.length > 20) myMotionBuffer.shift();
+            }
+
             if (valor > 0.5) {
                 sendP2P({ type: 'motion', jugador: playerNum, valor });
                 if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'motion', jugador: playerNum, valor });
