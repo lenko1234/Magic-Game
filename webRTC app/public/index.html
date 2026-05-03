@@ -86,15 +86,13 @@
             bottom: 0;
             left: 0;
             width: 100%;
-            height: 6px;
-            background: rgba(255, 255, 255, 0.1);
+            height: 48px;
+            background: transparent;
+            overflow: hidden;
             z-index: 100;
         }
-        #health-bar {
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(to right, #22c55e, #16a34a);
-            transition: width 0.3s ease;
+        #health-bar-container canvas {
+            position: absolute; inset: 0; width: 100%; height: 100%; display: block;
         }
 
         #connection-status {
@@ -205,15 +203,10 @@
     </div>
 
     <div id="health-bar-container">
-        <div id="health-bar"></div>
+        <canvas id="liq-hp"></canvas>
     </div>
 
-    <div class="fixed bottom-10 w-full flex justify-center gap-8 z-50 px-6">
-        <button onclick="triggerSpell('expelliarmus', event)" class="btn-spell w-16 h-16 rounded-full bg-purple-600 border-2 border-purple-400 shadow-lg shadow-purple-500/30"></button>
-        <button onclick="triggerSpell('accio', event)"        class="btn-spell w-16 h-16 rounded-full bg-white border-2 border-gray-300 shadow-lg"></button>
-        <button onclick="triggerSpell('desmaius', event)"     class="btn-spell w-16 h-16 rounded-full bg-red-600 border-2 border-red-400 shadow-lg shadow-red-500/30"></button>
-        <button onclick="triggerSpell('protego', event)"      class="btn-spell w-16 h-16 rounded-full bg-cyan-500 border-2 border-cyan-300 shadow-lg shadow-cyan-500/30"></button>
-    </div>
+    <!-- Botones eliminados: ahora todo es por gestos -->
 </div>
 
 <!-- ================================================================ -->
@@ -238,6 +231,166 @@
 // ----------------------------------------------------------------
 // ESTADO GLOBAL
 // ----------------------------------------------------------------
+class LiquidBar {
+    constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext('2d');
+        this.W = this.canvas.parentElement.clientWidth;
+        this.H = this.canvas.parentElement.clientHeight;
+        this.canvas.width = this.W;
+        this.canvas.height = this.H;
+        
+        this.targetHp = 1.0;
+        this.displayHp = 1.0;
+        this.shakeAmt = 0;
+        
+        this.waves = [
+            { ph: 0,   sp: 0.009,  amp: 2.8, fr: 0.018 },
+            { ph: 1.3, sp: -0.007, amp: 2.0, fr: 0.031 },
+            { ph: 3.1, sp: 0.011,  amp: 1.3, fr: 0.055 },
+            { ph: 5.0, sp: -0.005, amp: 0.8, fr: 0.09  },
+            { ph: 0.7, sp: 0.017,  amp: 0.5, fr: 0.14  },
+        ];
+        
+        this.bubbles = [];
+        for (let i = 0; i < 12; i++) {
+            this.bubbles.push({ x: Math.random()*this.W, y: this.H+Math.random()*this.H, r: 1+Math.random()*2, sp: 0.2+Math.random()*0.4, drift: (Math.random()-0.5)*0.2 });
+        }
+        this.particles = [];
+        this.animFrame = null;
+        this.topPadding = 12;
+    }
+    
+    lerpColor(a, b, t) {
+        const ah = parseInt(a.slice(1), 16), ar = ah >> 16, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
+        const bh = parseInt(b.slice(1), 16), br = bh >> 16, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+        const rr = ar + t * (br - ar), rg = ag + t * (bg - ag), rb = ab + t * (bb - ab);
+        return `rgb(${Math.round(rr)},${Math.round(rg)},${Math.round(rb)})`;
+    }
+
+    lerpTheme(thA, thB, t) {
+        return {
+            c1: this.lerpColor(thA.c1, thB.c1, t),
+            c2: this.lerpColor(thA.c2, thB.c2, t),
+            c3: this.lerpColor(thA.c3, thB.c3, t),
+            edge: this.lerpColor(thA.edge, thB.edge, t)
+        };
+    }
+
+    getTheme(p) {
+        const high = { c1:'#0d1f0d', c2:'#112211', c3:'#0a3320', edge:'#1a7a44' };
+        const mid  = { c1:'#1a0e00', c2:'#221400', c3:'#3a1e00', edge:'#9a5500' };
+        const low  = { c1:'#1a0000', c2:'#2a0000', c3:'#3d0000', edge:'#aa1010' };
+        
+        if (p >= 0.55) return this.lerpTheme(mid, high, (p - 0.55) / 0.45);
+        if (p >= 0.25) return this.lerpTheme(low, mid, (p - 0.25) / 0.30);
+        return low;
+    }
+    
+    waveY(x, baseY, extraAmp) {
+        let y = baseY;
+        for (const w of this.waves) y += Math.sin(x * w.fr + w.ph) * (w.amp + extraAmp);
+        return y;
+    }
+    
+    addParticles(x, y, theme, n) {
+        for (let i = 0; i < n; i++) {
+            const a = -Math.PI/2 + (Math.random()-0.5)*1.4;
+            const sp = 0.8 + Math.random()*2.5;
+            this.particles.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp, life: 1, r: 1.5+Math.random()*2.5, col: theme.edge, decay: 0.025+Math.random()*0.035 });
+        }
+    }
+    
+    drawLayer(baseY, offsetY, color, extraAmp) {
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, this.H);
+        this.ctx.lineTo(0, this.waveY(0, baseY + offsetY, extraAmp));
+        for (let x = 1; x <= this.W; x += 2) this.ctx.lineTo(x, this.waveY(x, baseY + offsetY, extraAmp));
+        this.ctx.lineTo(this.W, this.H);
+        this.ctx.closePath();
+        this.ctx.fillStyle = color;
+        this.ctx.fill();
+    }
+    
+    setHealth(hp) {
+        if (hp < this.targetHp) {
+            this.shakeAmt = 8;
+            const th = this.getTheme(hp);
+            const baseY = this.topPadding + (this.H - this.topPadding) * (1 - hp);
+            this.addParticles(this.W*0.4 + Math.random()*this.W*0.2, baseY + 4, th, 9);
+        }
+        this.targetHp = hp;
+    }
+    
+    update() {
+        this.displayHp += (this.targetHp - this.displayHp) * 0.10;
+        if (Math.abs(this.targetHp - this.displayHp) < 0.001) this.displayHp = this.targetHp;
+        this.shakeAmt *= 0.88;
+        for (const w of this.waves) w.ph += w.sp;
+        const th = this.getTheme(this.displayHp);
+        const baseY = this.topPadding + (this.H - this.topPadding) * (1 - this.displayHp) + (Math.random()-0.5) * this.shakeAmt;
+        this.ctx.clearRect(0, 0, this.W, this.H);
+        const extraAmp = this.shakeAmt * 0.15;
+        this.drawLayer(baseY, 10, th.c1, extraAmp);
+        this.drawLayer(baseY,  5, th.c2, extraAmp);
+        this.drawLayer(baseY,  0, th.c3, extraAmp);
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, this.waveY(0, baseY, extraAmp));
+        for (let x = 1; x <= this.W; x += 2) this.ctx.lineTo(x, this.waveY(x, baseY, extraAmp));
+        this.ctx.strokeStyle = th.edge;
+        this.ctx.lineWidth = 1;
+        this.ctx.globalAlpha = 0.55;
+        this.ctx.stroke();
+        this.ctx.globalAlpha = 1;
+        for (const b of this.bubbles) {
+            const surfY = this.waveY(b.x, baseY, extraAmp);
+            if (b.y > surfY + 1 && b.y < this.H) {
+                this.ctx.beginPath();
+                this.ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+                this.ctx.strokeStyle = th.edge;
+                this.ctx.lineWidth = 0.5;
+                this.ctx.globalAlpha = 0.2;
+                this.ctx.stroke();
+                this.ctx.globalAlpha = 1;
+            }
+            b.y -= b.sp;
+            b.x += b.drift;
+            if (b.y < baseY - 4 || b.y < 0) {
+                b.y = this.H + Math.random()*20;
+                b.x = Math.random() * this.W;
+            }
+        }
+        this.particles = this.particles.filter(p => p.life > 0.02);
+        for (const p of this.particles) {
+            p.x += p.vx; p.y += p.vy; p.vy += 0.18; p.life -= p.decay;
+            this.ctx.beginPath();
+            this.ctx.arc(p.x, p.y, Math.max(0.1, p.r * p.life), 0, Math.PI*2);
+            this.ctx.fillStyle = p.col;
+            this.ctx.globalAlpha = p.life * 0.8;
+            this.ctx.fill();
+            this.ctx.globalAlpha = 1;
+        }
+        if (this.displayHp < 0.25) {
+            const intensity = (0.25 - this.displayHp) / 0.25;
+            if (Math.random() < intensity * 0.12) {
+                this.shakeAmt = Math.max(this.shakeAmt, 3 + intensity * 5);
+                const th2 = this.getTheme(this.displayHp);
+                this.addParticles(Math.random()*this.W, this.waveY(Math.random()*this.W, baseY, extraAmp), th2, 2);
+            }
+        }
+    }
+
+    start() {
+        const loop = () => {
+            this.update();
+            this.animFrame = requestAnimationFrame(loop);
+        };
+        loop();
+    }
+}
+
+let myHealthBar;
+
 let playerNum = null;        // 1 = Host, 2 = Client
 let currentRoomId = null;
 let isHost = false;
@@ -252,6 +405,10 @@ let recognition;
 let motionHandler = null;
 let motionDebugInterval = null;
 let lastMotionValue = 0;
+let lastFlickTime = 0;
+const FLICK_THRESHOLD = 25;
+const offensiveSpells = ['expelliarmus', 'desmaius'];
+let lastOffensiveSpell = null;
 
 // Clash detection: guardamos el hechizo propio para comparar con el del rival
 let pendingMySpell = null;  // { tipo, timestamp }
@@ -282,11 +439,15 @@ loadSound('protego',      'sounds/protego.wav');
 loadSound('accio',        'sounds/accio.wav');
 
 function playSound(tipo, isMine) {
-    if (!sounds[tipo]) return;
+    if (!sounds[tipo]) return null;
     if (audioCtx.state === 'suspended') audioCtx.resume();
 
     const source = audioCtx.createBufferSource();
     source.buffer = sounds[tipo];
+
+    const filterNode = audioCtx.createBiquadFilter();
+    filterNode.type = 'lowpass';
+    filterNode.frequency.value = 20000; // Sin filtro por defecto
 
     const gainNode = audioCtx.createGain();
 
@@ -307,7 +468,8 @@ function playSound(tipo, isMine) {
         gainNode.gain.setValueCurveAtTime(curve, audioCtx.currentTime, travelDuration);
     }
 
-    source.connect(gainNode);
+    source.connect(filterNode);
+    filterNode.connect(gainNode);
     gainNode.connect(audioCtx.destination);
     
     // Aumentar velocidad para Expelliarmus
@@ -318,11 +480,14 @@ function playSound(tipo, isMine) {
     // Mantenemos la limpieza para que no se corte el audio tras varios hechizos
     source.onended = () => {
         source.disconnect();
+        filterNode.disconnect();
         gainNode.disconnect();
     };
 
     const offset = (tipo === 'protego') ? 0.25 : 0;
     source.start(audioCtx.currentTime, offset);
+
+    return { source, gainNode, filterNode };
 }
 
 // ----------------------------------------------------------------
@@ -370,9 +535,10 @@ function applyDamage(tipo) {
     if (tipo === 'accio')    damage = 5;
 
     health = Math.max(0, health - damage);
-    document.getElementById('health-bar').style.width = health + '%';
-    if (health < 30) document.getElementById('health-bar').style.background = '#ef4444';
+    if (myHealthBar) myHealthBar.setHealth(health / 100);
     if (window.navigator.vibrate) window.navigator.vibrate(100);
+
+    if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'health-update', jugador: playerNum, health: health });
 
     if (health <= 0) {
         showEndScreen('defeat');
@@ -402,11 +568,26 @@ function receiveAttack(data) {
         }
     }
 
-    playSound(data.tipo, false);
+    const soundNodes = playSound(data.tipo, false);
     const impactDelay = (data.tipo === 'expelliarmus') ? 600 : 800;
 
     setTimeout(() => {
-        if (isProtected) { setSpellStatus('¡Protegido!'); return; }
+        if (isProtected) { 
+            setSpellStatus('¡Protegido!'); 
+            if (soundNodes) {
+                const now = audioCtx.currentTime;
+                // Efecto de disipación: asfixiar frecuencias y bajar volumen rápido
+                soundNodes.filterNode.frequency.setValueAtTime(20000, now);
+                soundNodes.filterNode.frequency.exponentialRampToValueAtTime(300, now + 0.1);
+                
+                soundNodes.gainNode.gain.cancelScheduledValues(now);
+                soundNodes.gainNode.gain.setValueAtTime(soundNodes.gainNode.gain.value || 1, now);
+                soundNodes.gainNode.gain.linearRampToValueAtTime(0.01, now + 0.15);
+                
+                setTimeout(() => { try { soundNodes.source.stop(); } catch(e){} }, 200);
+            }
+            return; 
+        }
         applyDamage(data.tipo);
         if (data.tipo === 'expelliarmus') {
             isDisarmed = true;
@@ -455,7 +636,6 @@ function startClash() {
     spellCooldown = true;
     setSpellStatus('⚡ ¡MANTÉ FIRME! ⚡');
     showClashGlow();
-    attachMotionHandler();
 
     // Solo el Host maneja el temporizador del choque
     if (isHost) {
@@ -494,25 +674,59 @@ function endClash(data) {
     setTimeout(() => setSpellStatus(''), 2500);
 }
 
-function attachMotionHandler() {
+function checkGesture(e) {
+    if (isDisarmed || spellCooldown || isInClash) return;
+
+    const acc = e.acceleration;
+    if (!acc || acc.x === null) return;
+
+    const magnitude = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2);
+
+    if (magnitude > FLICK_THRESHOLD && (Date.now() - lastFlickTime > 1200)) {
+        lastFlickTime = Date.now();
+        
+        let tipo = '';
+        if (acc.x > 0) {
+            // Evitar repetir el mismo hechizo ofensivo dos veces seguidas
+            let newSpell;
+            do {
+                newSpell = offensiveSpells[Math.floor(Math.random() * offensiveSpells.length)];
+            } while (newSpell === lastOffensiveSpell && offensiveSpells.length > 1);
+            
+            tipo = newSpell;
+            lastOffensiveSpell = newSpell;
+        } else {
+            tipo = 'protego';
+        }
+
+        console.log("¡Gesto detectado! Lanzando:", tipo, " (acc.x:", acc.x.toFixed(2), ")");
+        triggerSpell(tipo);
+        if (window.navigator.vibrate) window.navigator.vibrate([50, 30, 100]);
+    }
+}
+
+function initGlobalMotion() {
+    if (motionHandler) return;
     motionHandler = (e) => {
-        if (!isInClash) return;
-        const rawAcc = e.acceleration;
-        const acc = (rawAcc && rawAcc.x !== null) ? rawAcc : e.accelerationIncludingGravity;
-        if (!acc) return;
-        const valor = Math.abs(acc.x || 0) + Math.abs(acc.y || 0) + Math.abs(acc.z || 0);
-        lastMotionValue = valor;
-        if (valor > 0.5) {
-            sendP2P({ type: 'motion', jugador: playerNum, valor });
-            if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'motion', jugador: playerNum, valor });
-            if (valor > 5 && window.navigator.vibrate) window.navigator.vibrate(30);
+        if (isInClash) {
+            const rawAcc = e.acceleration;
+            const acc = (rawAcc && rawAcc.x !== null) ? rawAcc : e.accelerationIncludingGravity;
+            if (!acc) return;
+            const valor = Math.abs(acc.x || 0) + Math.abs(acc.y || 0) + Math.abs(acc.z || 0);
+            lastMotionValue = valor;
+            if (valor > 0.5) {
+                sendP2P({ type: 'motion', jugador: playerNum, valor });
+                if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'motion', jugador: playerNum, valor });
+                if (valor > 5 && window.navigator.vibrate) window.navigator.vibrate(30);
+            }
+        } else {
+            checkGesture(e);
         }
     };
     window.addEventListener('devicemotion', motionHandler);
 }
 
 function stopClashMotion() {
-    if (motionHandler) { window.removeEventListener('devicemotion', motionHandler); motionHandler = null; }
     if (motionDebugInterval) { clearInterval(motionDebugInterval); motionDebugInterval = null; }
 }
 
@@ -572,7 +786,7 @@ function handleP2PMessage(msg) {
             // El host envía al cliente su vida actualizada
             if (!isHost) {
                 health = msg.health;
-                document.getElementById('health-bar').style.width = health + '%';
+                if (myHealthBar) myHealthBar.setHealth(health / 100);
             }
             break;
         case 'game-over':
@@ -677,15 +891,46 @@ function enterCombat() {
     document.getElementById('lobby').style.display = 'none';
     document.getElementById('combat').style.display = 'block';
     document.getElementById('connection-status').textContent = `Mago ${playerNum} | P2P ✓`;
+    
+    if (!myHealthBar) {
+        myHealthBar = new LiquidBar('liq-hp');
+        myHealthBar.start();
+    }
+    
     startVoiceRecognition();
+    initGlobalMotion();
 }
 
 function handleBodyTap() {
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        DeviceMotionEvent.requestPermission().catch(() => {});
+    if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission().then(state => {
+            if (state === 'granted') initGlobalMotion();
+        });
+    } else {
+        initGlobalMotion();
     }
 }
+
+// Soporte para teclado (PC Testing)
+window.addEventListener('keydown', (e) => {
+    if (isDisarmed || spellCooldown || isInClash) return;
+    
+    if (e.key === 'ArrowRight') {
+        // Ataque
+        let newSpell;
+        do {
+            newSpell = offensiveSpells[Math.floor(Math.random() * offensiveSpells.length)];
+        } while (newSpell === lastOffensiveSpell && offensiveSpells.length > 1);
+        
+        lastOffensiveSpell = newSpell;
+        triggerSpell(newSpell);
+    } 
+    else if (e.key === 'ArrowLeft') {
+        // Defensa
+        triggerSpell('protego');
+    }
+});
 
 // ----------------------------------------------------------------
 // LOBBY UI
@@ -786,8 +1031,7 @@ function resetGame() {
     pendingMySpell = null;
 
     // 2. Reiniciar UI
-    document.getElementById('health-bar').style.width = '100%';
-    document.getElementById('health-bar').style.background = 'linear-gradient(to right, #22c55e, #16a34a)';
+    if (myHealthBar) myHealthBar.setHealth(1.0);
     document.getElementById('spell-label').textContent = '';
     document.getElementById('spell-status').className = '';
     document.getElementById('combat').classList.remove('is-illuminated');
@@ -795,6 +1039,8 @@ function resetGame() {
     // 3. Ocultar pantalla final y volver al combate
     document.getElementById('end-screen').style.display = 'none';
     document.getElementById('combat').style.display = 'block';
+
+    if (currentRoomId) socket.emit('game-event', { roomId: currentRoomId, event: 'health-update', jugador: playerNum, health: 100 });
 
     // 4. Limpiar Three.js de fin de juego
     if (endRenderer) {

@@ -26,14 +26,25 @@
 
         #health-container {
             position: fixed;
-            bottom: 0; left: 0; width: 100%; height: 4px; display: flex; gap: 2px; z-index: 1000;
+            bottom: 0; left: 0; width: 100%; height: 36px; z-index: 1000; pointer-events: none;
         }
-        .hp-bar-bg { flex: 1; background: rgba(255,255,255,0.05); }
-        .hp-fill {
-            width: 100%; height: 100%; background: #ff1100;
-            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 0 15px rgba(255, 17, 0, 0.5);
+        .bar-shell {
+            position: absolute; top: 0; height: 100%; width: 55%;
+            background: transparent;
+            border: none; overflow: hidden;
+            box-shadow: none; border-radius: 0;
         }
+        #shell-p1 {
+            left: 0;
+            mask-image: linear-gradient(to right, black 80%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to right, black 80%, transparent 100%);
+        }
+        #shell-p2 {
+            right: 0;
+            mask-image: linear-gradient(to left, black 80%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to left, black 80%, transparent 100%);
+        }
+        .bar-shell canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
         #status {
             position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
@@ -63,8 +74,8 @@
     </div>
 
     <div id="health-container">
-        <div class="hp-bar-bg"><div id="hp-p1" class="hp-fill"></div></div>
-        <div class="hp-bar-bg"><div id="hp-p2" class="hp-fill"></div></div>
+        <div id="shell-p1" class="bar-shell"><canvas id="liq-p1"></canvas></div>
+        <div id="shell-p2" class="bar-shell"><canvas id="liq-p2"></canvas></div>
     </div>
 
     <div id="status">PANTALLA ESPERANDO</div>
@@ -220,6 +231,156 @@
         `;
 
         // --- LÓGICA ---
+        class LiquidBar {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.W = this.canvas.parentElement.clientWidth;
+                this.H = this.canvas.parentElement.clientHeight;
+                this.canvas.width = this.W;
+                this.canvas.height = this.H;
+                
+                this.targetHp = 1.0;
+                this.displayHp = 1.0;
+                this.shakeAmt = 0;
+                
+                this.waves = [
+                    { ph: 0,   sp: 0.009,  amp: 2.8, fr: 0.018 },
+                    { ph: 1.3, sp: -0.007, amp: 2.0, fr: 0.031 },
+                    { ph: 3.1, sp: 0.011,  amp: 1.3, fr: 0.055 },
+                    { ph: 5.0, sp: -0.005, amp: 0.8, fr: 0.09  },
+                    { ph: 0.7, sp: 0.017,  amp: 0.5, fr: 0.14  },
+                ];
+                
+                this.bubbles = [];
+                for (let i = 0; i < 12; i++) {
+                    this.bubbles.push({ x: Math.random()*this.W, y: this.H+Math.random()*this.H, r: 1+Math.random()*2, sp: 0.2+Math.random()*0.4, drift: (Math.random()-0.5)*0.2 });
+                }
+                this.particles = [];
+                this.topPadding = 12;
+            }
+            
+            lerpColor(a, b, t) {
+                const ah = parseInt(a.slice(1), 16), ar = ah >> 16, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
+                const bh = parseInt(b.slice(1), 16), br = bh >> 16, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+                const rr = ar + t * (br - ar), rg = ag + t * (bg - ag), rb = ab + t * (bb - ab);
+                return `rgb(${Math.round(rr)},${Math.round(rg)},${Math.round(rb)})`;
+            }
+
+            lerpTheme(thA, thB, t) {
+                return {
+                    c1: this.lerpColor(thA.c1, thB.c1, t),
+                    c2: this.lerpColor(thA.c2, thB.c2, t),
+                    c3: this.lerpColor(thA.c3, thB.c3, t),
+                    edge: this.lerpColor(thA.edge, thB.edge, t)
+                };
+            }
+
+            getTheme(p) {
+                const high = { c1:'#0d1f0d', c2:'#112211', c3:'#0a3320', edge:'#1a7a44' };
+                const mid  = { c1:'#1a0e00', c2:'#221400', c3:'#3a1e00', edge:'#9a5500' };
+                const low  = { c1:'#1a0000', c2:'#2a0000', c3:'#3d0000', edge:'#aa1010' };
+                
+                if (p >= 0.55) return this.lerpTheme(mid, high, (p - 0.55) / 0.45);
+                if (p >= 0.25) return this.lerpTheme(low, mid, (p - 0.25) / 0.30);
+                return low;
+            }
+            
+            waveY(x, baseY, extraAmp) {
+                let y = baseY;
+                for (const w of this.waves) y += Math.sin(x * w.fr + w.ph) * (w.amp + extraAmp);
+                return y;
+            }
+            
+            addParticles(x, y, theme, n) {
+                for (let i = 0; i < n; i++) {
+                    const a = -Math.PI/2 + (Math.random()-0.5)*1.4;
+                    const sp = 0.8 + Math.random()*2.5;
+                    this.particles.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp, life: 1, r: 1.5+Math.random()*2.5, col: theme.edge, decay: 0.025+Math.random()*0.035 });
+                }
+            }
+            
+            drawLayer(baseY, offsetY, color, extraAmp) {
+                this.ctx.beginPath();
+                this.ctx.moveTo(0, this.H);
+                this.ctx.lineTo(0, this.waveY(0, baseY + offsetY, extraAmp));
+                for (let x = 1; x <= this.W; x += 2) this.ctx.lineTo(x, this.waveY(x, baseY + offsetY, extraAmp));
+                this.ctx.lineTo(this.W, this.H);
+                this.ctx.closePath();
+                this.ctx.fillStyle = color;
+                this.ctx.fill();
+            }
+            
+            setHealth(hp) {
+                if (hp < this.targetHp) {
+                    this.shakeAmt = 8;
+                    const th = this.getTheme(hp);
+                    const baseY = this.topPadding + (this.H - this.topPadding) * (1 - hp);
+                    this.addParticles(this.W*0.4 + Math.random()*this.W*0.2, baseY + 4, th, 9);
+                }
+                this.targetHp = hp;
+            }
+            
+            update() {
+                this.displayHp += (this.targetHp - this.displayHp) * 0.10;
+                if (Math.abs(this.targetHp - this.displayHp) < 0.001) this.displayHp = this.targetHp;
+                this.shakeAmt *= 0.88;
+                for (const w of this.waves) w.ph += w.sp;
+                const th = this.getTheme(this.displayHp);
+                const baseY = this.topPadding + (this.H - this.topPadding) * (1 - this.displayHp) + (Math.random()-0.5) * this.shakeAmt;
+                this.ctx.clearRect(0, 0, this.W, this.H);
+                const extraAmp = this.shakeAmt * 0.15;
+                this.drawLayer(baseY, 10, th.c1, extraAmp);
+                this.drawLayer(baseY,  5, th.c2, extraAmp);
+                this.drawLayer(baseY,  0, th.c3, extraAmp);
+                this.ctx.beginPath();
+                this.ctx.moveTo(0, this.waveY(0, baseY, extraAmp));
+                for (let x = 1; x <= this.W; x += 2) this.ctx.lineTo(x, this.waveY(x, baseY, extraAmp));
+                this.ctx.strokeStyle = th.edge;
+                this.ctx.lineWidth = 1;
+                this.ctx.globalAlpha = 0.55;
+                this.ctx.stroke();
+                this.ctx.globalAlpha = 1;
+                for (const b of this.bubbles) {
+                    const surfY = this.waveY(b.x, baseY, extraAmp);
+                    if (b.y > surfY + 1 && b.y < this.H) {
+                        this.ctx.beginPath();
+                        this.ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+                        this.ctx.strokeStyle = th.edge;
+                        this.ctx.lineWidth = 0.5;
+                        this.ctx.globalAlpha = 0.2;
+                        this.ctx.stroke();
+                        this.ctx.globalAlpha = 1;
+                    }
+                    b.y -= b.sp;
+                    b.x += b.drift;
+                    if (b.y < baseY - 4 || b.y < 0) {
+                        b.y = this.H + Math.random()*20;
+                        b.x = Math.random() * this.W;
+                    }
+                }
+                this.particles = this.particles.filter(p => p.life > 0.02);
+                for (const p of this.particles) {
+                    p.x += p.vx; p.y += p.vy; p.vy += 0.18; p.life -= p.decay;
+                    this.ctx.beginPath();
+                    this.ctx.arc(p.x, p.y, Math.max(0.1, p.r * p.life), 0, Math.PI*2);
+                    this.ctx.fillStyle = p.col;
+                    this.ctx.globalAlpha = p.life * 0.8;
+                    this.ctx.fill();
+                    this.ctx.globalAlpha = 1;
+                }
+                if (this.displayHp < 0.25) {
+                    const intensity = (0.25 - this.displayHp) / 0.25;
+                    if (Math.random() < intensity * 0.12) {
+                        this.shakeAmt = Math.max(this.shakeAmt, 3 + intensity * 5);
+                        const th2 = this.getTheme(this.displayHp);
+                        this.addParticles(Math.random()*this.W, this.waveY(Math.random()*this.W, baseY, extraAmp), th2, 2);
+                    }
+                }
+            }
+        }
+        
+        let barP1, barP2;
         let scene, camera, renderer, composer, bloomPass;
         let beamL, beamR, collisionGroup, plasmaMat, raymarchMat, shieldL, shieldR;
         let isColliding = false;
@@ -236,7 +397,51 @@
         let currentRColor = new THREE.Color(0xff1100);
 
         const spellVertexShader = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-        const spellFragmentShader = `uniform float time; uniform vec3 beamColor; uniform float direction; varying vec2 vUv; ${snoise3D} void main() { vec2 uv = vUv; float speed = time * 8.0 * direction; float distY = abs(uv.y - 0.5); float noiseX = snoise(vec3(uv.x * 3.0 - speed, time * 5.0, 0.0)) * 0.08; float core = smoothstep(0.04, 0.0, abs((uv.y - 0.5) + noiseX)); float turb = abs(snoise(vec3(uv.x * 5.0 - speed * 1.5, uv.y * 10.0, time * 8.0))); float electric = smoothstep(0.2, 0.0, turb + distY * 0.8); float aura = smoothstep(0.4, 0.0, distY) * 0.4; float alpha = max(core, max(electric, aura)) * smoothstep(0.0, 0.15, uv.x) * smoothstep(1.0, 0.85, uv.x); vec3 finalColor = mix(beamColor, vec3(1.0), core * 1.5); gl_FragColor = vec4(finalColor, alpha); }`;
+        const spellFragmentShader = `
+            uniform float time; 
+            uniform vec3 beamColor; 
+            uniform float direction; 
+            varying vec2 vUv; 
+            ${snoise3D} 
+            void main() { 
+                vec2 uv = vUv; 
+                float speed = time * 8.0 * direction; 
+                float distY = abs(uv.y - 0.5); 
+                
+                // 1. Núcleo principal (más delgado y errático)
+                float noiseX = snoise(vec3(uv.x * 3.0 - speed, time * 5.0, 0.0)) * 0.05; 
+                float core = smoothstep(0.03, 0.0, abs((uv.y - 0.5) + noiseX)); 
+                
+                // 2. Electricidad de Alta Frecuencia (Rayos finos y caóticos)
+                // Capa A: Rayos grandes
+                float n1 = snoise(vec3(uv.x * 12.0 - speed * 1.5, time * 18.0, 0.0));
+                // Capa B: Micro detalles
+                float n2 = snoise(vec3(uv.x * 25.0 - speed * 2.0, time * 30.0, 0.0));
+                
+                // Combinamos los ruidos para crear un camino que sube y baja bruscamente
+                float pathDist = abs((uv.y - 0.5) + n1 * 0.15 + n2 * 0.05);
+                
+                // Truco de magia: constante / distancia crea una línea hiper fina y brillante
+                float electric = 0.005 / (pathDist + 0.002);
+                
+                // Parpadeo: Hacemos que la electricidad titile a lo largo del rayo
+                float flicker = snoise(vec3(uv.x * 5.0 - speed * 3.0, time * 15.0, 0.0));
+                electric *= smoothstep(-0.2, 0.5, flicker); // Apaga partes para crear arcos separados
+                electric = clamp(electric, 0.0, 1.0); 
+                
+                // 3. Aura general
+                float aura = smoothstep(0.4, 0.0, distY) * 0.6; 
+                
+                // 4. Composición
+                float alpha = max(core, max(electric, aura)) * smoothstep(0.0, 0.15, uv.x) * smoothstep(1.0, 0.85, uv.x); 
+                
+                // Mezclamos el color base con blanco puro en el core y en la electricidad
+                float energy = clamp(core * 1.5 + electric * 1.5, 0.0, 1.0);
+                vec3 finalColor = mix(beamColor, vec3(1.0), energy); 
+                
+                gl_FragColor = vec4(finalColor, alpha); 
+            }
+        `;
                 const plasmaFragmentShader = `uniform float time; uniform vec3 colorL; uniform vec3 colorR; varying vec2 vUv; ${snoise3D} void main() { vec2 cUv = vUv * 2.0 - 1.0; float dist = length(cUv); float starburst = (sin(atan(cUv.y, cUv.x)*12.0+time*8.0)*0.5+0.5) * smoothstep(1.0, 0.0, dist); float plasma = (snoise(vec3(cUv*2.0, time*3.0))*0.5+0.5) * (snoise(vec3(cUv*4.0, -time*2.0))*0.5+0.5); float mixFactor = smoothstep(-0.2, 0.2, cUv.x + snoise(vec3(cUv*2.0, time))*0.3); vec3 color = mix(colorL, colorR, mixFactor); gl_FragColor = vec4(mix(color, vec3(1.0), smoothstep(0.3, 0.0, dist)), smoothstep(1.0, 0.1, dist) * (plasma + starburst)); }`;
                 const flareFragmentShader = `varying vec2 vUv; void main() { vec2 uv = vUv * 2.0 - 1.0; float intensity = smoothstep(1.0, 0.0, abs(uv.y * 15.0)) * smoothstep(1.0, 0.0, abs(uv.x)); gl_FragColor = vec4(1.0, 1.0, 0.9, intensity * 0.8); }`;
         const shieldFragmentShader = `uniform float time; uniform vec3 color; varying vec2 vUv; void main() { vec2 uv = vUv * 2.0 - 1.0; float dist = length(uv); float glow = pow(1.0 - dist, 3.0); float pulse = 0.8 + sin(time * 5.0) * 0.2; float alpha = smoothstep(1.0, 0.0, dist) * glow * pulse; gl_FragColor = vec4(color * 1.5, alpha * 0.7); }`;
@@ -343,6 +548,9 @@
             shieldL = createShield(-45);
             shieldR = createShield(45);
 
+            barP1 = new LiquidBar('liq-p1');
+            barP2 = new LiquidBar('liq-p2');
+
             animate();
         }
 
@@ -391,35 +599,58 @@
                 clashRadius = 0;
                 // Beam L (Mago 1) disparando hacia la derecha, bloqueado por Shield R (Mago 2)
                 if (beamL.group.visible) {
-                    // Ajustamos el offset (de 250 a 242) para compensar el fade del shader y el radio del escudo
-                    const tipX = beamL.group.position.x + 242;
-                    const isBlocked = shieldR.visible && tipX >= (shieldR.position.x - 6);
+                    beamL.group.position.x += 1.5; // La cola siempre avanza
                     
-                    if (!isBlocked) {
-                        beamL.group.position.x += 1.5;
+                    const hurtboxR = shieldR.position.x - 8.5;
+                    let currentLength = 250 * beamL.baseScale;
+                    let tipX = beamL.group.position.x + currentLength;
+                    
+                    const isBlocked = shieldR.visible && tipX >= hurtboxR;
+                    
+                    if (isBlocked) {
+                        // Anclar la punta al escudo y achicar la escala
+                        const remainingDist = hurtboxR - beamL.group.position.x;
+                        if (remainingDist <= 0) {
+                            beamL.group.visible = false; // Se consumió por completo
+                        } else {
+                            beamL.group.scale.x = remainingDist / 250;
+                            if (Math.random() > 0.6) sparks.find(s => !s.mesh.visible)?.spawn(hurtboxR, currentLColor);
+                        }
                     } else {
-                        // Chispas en el punto de impacto visual
-                        if (Math.random() > 0.6) sparks.find(s => !s.mesh.visible)?.spawn(shieldR.position.x - 5, currentLColor);
+                        // Si no choca, mantiene su escala base
+                        beamL.group.scale.x = beamL.baseScale;
+                        if (Math.random() > 0.7) sparks.find(s => !s.mesh.visible)?.spawn(tipX, currentLColor);
                     }
                     
                     if (beamL.group.position.x > 300) beamL.group.visible = false;
-                    if (Math.random() > 0.7 && !isBlocked) sparks.find(s => !s.mesh.visible)?.spawn(beamL.group.position.x, currentLColor);
                 }
 
                 // Beam R (Mago 2) disparando hacia la izquierda, bloqueado por Shield L (Mago 1)
                 if (beamR.group.visible) {
-                    const tipX = beamR.group.position.x - 242;
-                    const isBlocked = shieldL.visible && tipX <= (shieldL.position.x + 6);
+                    beamR.group.position.x -= 1.5; // La cola siempre avanza
+                    
+                    const hurtboxL = shieldL.position.x + 8.5;
+                    let currentLength = 250 * beamR.baseScale;
+                    let tipX = beamR.group.position.x - currentLength;
 
-                    if (!isBlocked) {
-                        beamR.group.position.x -= 1.5;
+                    const isBlocked = shieldL.visible && tipX <= hurtboxL;
+
+                    if (isBlocked) {
+                        // Anclar la punta al escudo y achicar la escala
+                        const remainingDist = beamR.group.position.x - hurtboxL;
+                        if (remainingDist <= 0) {
+                            beamR.group.visible = false; // Se consumió por completo
+                        } else {
+                            beamR.group.scale.x = remainingDist / 250;
+                            if (Math.random() > 0.6) sparks.find(s => !s.mesh.visible)?.spawn(hurtboxL, currentRColor);
+                        }
                     } else {
-                        // Chispas en el punto de impacto visual
-                        if (Math.random() > 0.6) sparks.find(s => !s.mesh.visible)?.spawn(shieldL.position.x + 5, currentRColor);
+                        // Si no choca, mantiene su escala base
+                        beamR.group.scale.x = beamR.baseScale;
+                        if (Math.random() > 0.7) sparks.find(s => !s.mesh.visible)?.spawn(tipX, currentRColor);
                     }
 
                     if (beamR.group.position.x < -300) beamR.group.visible = false;
-                    if (Math.random() > 0.7 && !isBlocked) sparks.find(s => !s.mesh.visible)?.spawn(beamR.group.position.x, currentRColor);
                 }
             }
 
@@ -434,6 +665,10 @@
             raymarchMat.uniforms.uClashX.value = clashX;
             raymarchMat.uniforms.uClashRadius.value = clashRadius;
             sparks.forEach(s => s.update(1.0));
+            
+            if (barP1) barP1.update();
+            if (barP2) barP2.update();
+            
             composer.render();
         }
 
@@ -491,29 +726,38 @@
                 }
 
                 if (data.jugador === 1) { 
+                    beamL.baseScale = scale;
                     beamL.group.scale.x = scale;
                     beamL.group.visible = true; 
                     beamL.group.position.x = -startX; 
                     beamL.mat.uniforms.beamColor.value.copy(color); 
                     currentLColor.copy(color); 
                     plasmaMat.uniforms.colorL.value.copy(color); 
-                    raymarchMat.uniforms.colorL.value.copy(color); 
+                    raymarchMat.uniforms.colorL.value.copy(color);
+                    
+                    clearTimeout(beamL.timeout);
+                    beamL.timeout = setTimeout(() => { beamL.group.visible = false; }, 1000);
                 }
                 else { 
+                    beamR.baseScale = scale;
                     beamR.group.scale.x = scale;
                     beamR.group.visible = true; 
                     beamR.group.position.x = startX; 
                     beamR.mat.uniforms.beamColor.value.copy(color); 
                     currentRColor.copy(color); 
                     plasmaMat.uniforms.colorR.value.copy(color); 
-                    raymarchMat.uniforms.colorR.value.copy(color); 
+                    raymarchMat.uniforms.colorR.value.copy(color);
+                    
+                    clearTimeout(beamR.timeout);
+                    beamR.timeout = setTimeout(() => { beamR.group.visible = false; }, 1000);
                 }
-                if (data.tipo !== 'protego') {
-                    setTimeout(() => {
-                        let dmg = data.tipo === 'desmaius' ? 25 : 10;
-                        if (data.jugador === 1) { healthP2 = Math.max(0, healthP2 - dmg); document.getElementById('hp-p2').style.width = healthP2 + '%'; }
-                        else { healthP1 = Math.max(0, healthP1 - dmg); document.getElementById('hp-p1').style.width = healthP1 + '%'; }
-                    }, 800);
+            } else if (data.event === 'health-update') {
+                if (data.jugador === 1) {
+                    healthP1 = data.health;
+                    barP1.setHealth(healthP1 / 100);
+                } else {
+                    healthP2 = data.health;
+                    barP2.setHealth(healthP2 / 100);
                 }
             } else if (data.event === 'motion') { instability[data.jugador] += data.valor; }
             else if (data.event === 'clash-start') { isColliding = true; collisionGroup.visible = true; clashX = 0; }
@@ -521,8 +765,8 @@
             else if (data.event === 'rematch') {
                 // Reiniciar vida
                 healthP1 = 100; healthP2 = 100;
-                document.getElementById('hp-p1').style.width = '100%';
-                document.getElementById('hp-p2').style.width = '100%';
+                barP1.setHealth(1.0);
+                barP2.setHealth(1.0);
                 // Limpiar visuales
                 isColliding = false;
                 collisionGroup.visible = false;
