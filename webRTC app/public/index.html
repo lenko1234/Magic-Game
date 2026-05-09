@@ -593,33 +593,45 @@ let sounds = {};
 
 // ----------------------------------------------------------------
 // AUDIO UNLOCK
-// El AudioContext se crea suspendido cuando no hay gesto previo del
-// usuario (política de navegadores modernos en HTTPS/producción).
-// La única forma de reanudarlo en iOS/Android es llamar a resume()
-// SINCRÓNICAMENTE dentro del handler de un evento de usuario real.
-// Además jugamos un buffer silencioso de 1 muestra, que es el trick
-// estándar para "calentar" la pipeline de audio en Safari iOS.
+// El AudioContext se crea suspendido en HTTPS/producción (política
+// de navegadores). iOS Safari exige que resume() se llame dentro de
+// un gesto de usuario. devicemotion NO cuenta como gesto, así que
+// los hechizos propios tampoco pueden desbloquear el audio.
+//
+// Solución: guardar la Promise de resume() para que playSound()
+// pueda esperarla aunque el evento que disparó el sonido no sea
+// un gesto. El buffer silencioso se juega DESPUÉS de que el
+// contexto queda en 'running' (dentro del .then), no antes.
 // ----------------------------------------------------------------
 let _audioUnlocked = false;
+let _audioUnlockPromise = null; // Promise del resume(), para que playSound() pueda esperarla
 
-function _unlockAudioSync() {
-    if (_audioUnlocked) return;
-    audioCtx.resume();
-    try {
-        const silentBuf = audioCtx.createBuffer(1, 1, 22050);
-        const silentSrc = audioCtx.createBufferSource();
-        silentSrc.buffer = silentBuf;
-        silentSrc.connect(audioCtx.destination);
-        silentSrc.start(0);
-    } catch(e) {}
-    _audioUnlocked = true;
-    console.log('🔊 Audio desbloqueado.');
+function _unlockAudio() {
+    if (_audioUnlocked || _audioUnlockPromise) return;
+
+    _audioUnlockPromise = audioCtx.resume().then(() => {
+        // Buffer silencioso de 1 muestra: trick estándar de iOS Safari
+        // para "despertar" la pipeline de audio. DEBE ir dentro del .then
+        // para que el contexto ya esté en 'running' al momento de start().
+        try {
+            const silentBuf = audioCtx.createBuffer(1, 1, 22050);
+            const silentSrc = audioCtx.createBufferSource();
+            silentSrc.buffer = silentBuf;
+            silentSrc.connect(audioCtx.destination);
+            silentSrc.start(0);
+        } catch(e) {}
+        _audioUnlocked = true;
+        console.log('🔊 Audio desbloqueado. Estado:', audioCtx.state);
+    }).catch(e => {
+        _audioUnlockPromise = null; // Permitir reintento en el próximo gesto
+        console.warn('⚠️ Error al desbloquear AudioContext:', e);
+    });
 }
 
-// Escuchar en fase de captura para atrapar el gesto ANTES
-// de que cualquier otro handler lo consuma (stopPropagation, etc.)
+// Fase de captura para atrapar el gesto ANTES de que lo consuma
+// cualquier otro handler (botones, stopPropagation, etc.)
 ['touchstart', 'touchend', 'click'].forEach(evt =>
-    document.addEventListener(evt, _unlockAudioSync, { capture: true, passive: true })
+    document.addEventListener(evt, _unlockAudio, { capture: true, passive: true })
 );
 
 async function loadSound(name, url) {
@@ -638,12 +650,20 @@ loadSound('accio',        'sounds/accio.wav');
 async function playSound(tipo, isMine) {
     if (!sounds[tipo]) return null;
 
-    // Si el audio aún está suspendido aquí, es porque playSound fue llamado
-    // desde un callback de red (hechizo del rival) sin gesto de usuario.
-    // En ese contexto, resume() es ignorado silenciosamente por el navegador.
-    // _unlockAudioSync() ya debería haberlo desbloqueado en el primer toque.
-    if (audioCtx.state === 'suspended') {
-        console.warn('⚠️ AudioContext suspendido al intentar reproducir. El usuario no tocó la pantalla aún.');
+    // Si el contexto no está 'running', esperamos la Promise del unlock.
+    // Caso típico en iOS: el gesto ya ocurrió (toque en lobby) pero resume()
+    // aún no resolvió cuando llega el primer hechizo por devicemotion.
+    if (audioCtx.state !== 'running') {
+        if (_audioUnlockPromise) {
+            await _audioUnlockPromise;
+        } else {
+            console.warn('⚠️ AudioContext suspendido y sin unlock iniciado. Tocá la pantalla primero.');
+            return null;
+        }
+    }
+    // Verificación final: si después del await sigue sin estar running, abortamos.
+    if (audioCtx.state !== 'running') {
+        console.warn('⚠️ AudioContext no pudo activarse. Estado:', audioCtx.state);
         return null;
     }
 
@@ -1151,7 +1171,7 @@ function enterCombat() {
 }
 
 function handleBodyTap() {
-    _unlockAudioSync(); // Refuerzo por si el capture-phase listener no alcanzó
+    _unlockAudio(); // Refuerzo por si el capture-phase listener no alcanzó
     if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
         DeviceMotionEvent.requestPermission().then(state => {
             if (state === 'granted') initGlobalMotion();
