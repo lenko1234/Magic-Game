@@ -588,7 +588,7 @@ const socket = io();
 // ----------------------------------------------------------------
 // AUDIO ENGINE (copiado del legacy)
 // ----------------------------------------------------------------
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let audioCtx = null;
 let sounds = {};
 
 // ----------------------------------------------------------------
@@ -628,6 +628,10 @@ let _audioReadyPromise = null;
 
 function _unlockAudio() {
     if (_audioReady || _audioReadyPromise) return;
+
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
 
     _audioReadyPromise = audioCtx.resume().then(async () => {
         // Buffer silencioso: trick estándar para "despertar" iOS Safari
