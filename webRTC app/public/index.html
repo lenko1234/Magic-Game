@@ -886,34 +886,62 @@ function endClash(data) {
     setTimeout(() => setSpellStatus(''), 2500);
 }
 
+let gestureBuffer = [];
+let analyzingGesture = false;
+
 function checkGesture(e) {
     if (isDisarmed || spellCooldown || isInClash) return;
 
     const acc = e.acceleration;
     if (!acc || acc.x === null) return;
 
+    // Acumulamos siempre el movimiento en el buffer (los últimos 30 frames)
+    gestureBuffer.push({ x: acc.x, y: acc.y, z: acc.z });
+    if (gestureBuffer.length > 30) gestureBuffer.shift();
+
+    if (analyzingGesture) return; // Si ya cruzó el umbral, solo acumula frames hasta que pasen los 150ms
+
     const magnitude = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2);
 
     if (magnitude > FLICK_THRESHOLD && (Date.now() - lastFlickTime > 1200)) {
-        lastFlickTime = Date.now();
+        analyzingGesture = true;
         
-        let tipo = '';
-        if (acc.x > 0) {
-            // Evitar repetir el mismo hechizo ofensivo dos veces seguidas
-            let newSpell;
-            do {
-                newSpell = offensiveSpells[Math.floor(Math.random() * offensiveSpells.length)];
-            } while (newSpell === lastOffensiveSpell && offensiveSpells.length > 1);
-            
-            tipo = newSpell;
-            lastOffensiveSpell = newSpell;
-        } else {
-            tipo = 'protego';
-        }
+        // Esperamos 150ms extra para capturar el "rebote" o latigazo completo en el buffer
+        setTimeout(() => {
+            let maxX = -Infinity, minX = Infinity, maxY = -Infinity;
+            for (let frame of gestureBuffer) {
+                if (frame.x > maxX) maxX = frame.x;
+                if (frame.x < minX) minX = frame.x;
+                if (frame.y > maxY) maxY = frame.y;
+            }
 
-        console.log("¡Gesto detectado! Lanzando:", tipo, " (acc.x:", acc.x.toFixed(2), ")");
-        triggerSpell(tipo);
-        if (window.navigator.vibrate) window.navigator.vibrate([50, 30, 100]);
+            let tipo = '';
+            
+            // --- NUEVO CEREBRO DEL DETECTOR ---
+            // Basado en los logs:
+            // ATAQUE: Latigazo violento. Alcanza minX < -40 o maxY > 40 o maxX > 25.
+            // DEFENSA: Movimiento de escudo firme. minX llega a -35, pero NUNCA tiene picos de Y > 40 ni X > 25.
+            if (minX < -38 || maxY > 39 || maxX > 25) {
+                // Evitar repetir el mismo hechizo ofensivo dos veces seguidas
+                let newSpell;
+                do {
+                    newSpell = offensiveSpells[Math.floor(Math.random() * offensiveSpells.length)];
+                } while (newSpell === lastOffensiveSpell && offensiveSpells.length > 1);
+                
+                tipo = newSpell;
+                lastOffensiveSpell = newSpell;
+            } else {
+                tipo = 'protego';
+            }
+
+            console.log(`¡Gesto mágico analizado! Lanzando: ${tipo} (maxX: ${maxX.toFixed(1)}, minX: ${minX.toFixed(1)}, maxY: ${maxY.toFixed(1)})`);
+            triggerSpell(tipo);
+            if (window.navigator.vibrate) window.navigator.vibrate([70, 30, 100]);
+            
+            lastFlickTime = Date.now();
+            analyzingGesture = false;
+            gestureBuffer = []; // Limpiamos para el próximo hechizo
+        }, 150);
     }
 }
 

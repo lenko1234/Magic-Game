@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Spell Trainer - Magic Lab</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #020617; color: white; font-family: 'Inter', sans-serif; overflow: hidden; }
+        .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .btn-record { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: relative; overflow: hidden; }
+        .btn-record:active { transform: scale(0.95); }
+        .recording { animation: pulse-red 1.5s infinite; border-color: #ef4444 !important; }
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); } 70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+        
+        #data-visualizer { height: 120px; display: flex; align-items: flex-end; gap: 4px; padding: 10px; }
+        .bar { width: 33%; transition: height 0.1s; border-radius: 4px 4px 0 0; position: relative; }
+        .bar-label { position: absolute; top: -20px; width: 100%; text-align: center; font-size: 10px; font-family: monospace; opacity: 0.6; }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen">
+
+    <!-- LOBBY -->
+    <div id="lobby-view" class="flex-1 flex flex-col items-center justify-center p-6 space-y-8">
+        <div class="text-center">
+            <h1 class="text-4xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">SPELL TRAINER</h1>
+            <p class="text-slate-500 text-sm mt-2">Laboratorio de calibración de gestos</p>
+        </div>
+        
+        <div class="w-full max-w-xs space-y-4">
+            <input id="room-input" type="text" placeholder="CÓDIGO DE SALA" 
+                class="w-full bg-slate-900/50 border border-slate-700 rounded-2xl p-4 text-center text-xl font-mono focus:border-blue-500 outline-none transition-all">
+            <button id="btn-connect" class="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-bold text-lg shadow-lg shadow-blue-500/20">
+                ENTRAR AL LAB
+            </button>
+        </div>
+    </div>
+
+    <!-- TRAINER -->
+    <div id="trainer-view" class="hidden flex-1 flex flex-col p-6 space-y-6">
+        
+        <!-- Sensor Monitor -->
+        <div class="glass rounded-3xl p-4 space-y-4">
+            <div class="flex justify-between items-center px-2">
+                <span class="text-xs font-bold text-slate-500 tracking-widest uppercase">Live Sensor Data</span>
+                <span id="room-tag" class="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-1 rounded-md font-mono"></span>
+            </div>
+            
+            <div id="data-visualizer" class="bg-black/40 rounded-xl border border-white/5">
+                <div id="bar-x" class="bar bg-red-500/50" style="height: 0%"><span class="bar-label">X</span></div>
+                <div id="bar-y" class="bar bg-green-500/50" style="height: 0%"><span class="bar-label">Y</span></div>
+                <div id="bar-z" class="bar bg-blue-500/50" style="height: 0%"><span class="bar-label">Z</span></div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="grid grid-cols-1 gap-4 flex-1">
+            <button id="btn-record-attack" class="btn-record glass rounded-3xl flex flex-col items-center justify-center space-y-2 border-orange-500/30 group">
+                <span class="text-4xl group-active:scale-125 transition-transform">⚔️</span>
+                <span class="font-bold text-orange-400">GRABAR ATAQUE</span>
+                <span class="text-[10px] text-slate-500">Hechizo Ofensivo</span>
+            </button>
+
+            <button id="btn-record-defense" class="btn-record glass rounded-3xl flex flex-col items-center justify-center space-y-2 border-cyan-500/30 group">
+                <span class="text-4xl group-active:scale-125 transition-transform">🛡️</span>
+                <span class="font-bold text-cyan-400">GRABAR DEFENSA</span>
+                <span class="text-[10px] text-slate-500">Hechizo Protego</span>
+            </button>
+        </div>
+
+        <div id="status-msg" class="text-center text-xs text-slate-500 font-medium h-4">
+            Listo para calibrar
+        </div>
+
+        <button id="btn-perms" class="hidden text-xs text-blue-400 underline py-2">Habilitar Sensores (iOS)</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module">
+        const socket = io();
+        let currentRoomId = null;
+        let isRecording = false;
+        let recordedData = [];
+        let recordType = '';
+
+        const lobby = document.getElementById('lobby-view');
+        const trainer = document.getElementById('trainer-view');
+        const statusMsg = document.getElementById('status-msg');
+        const bars = {
+            x: document.getElementById('bar-x'),
+            y: document.getElementById('bar-y'),
+            z: document.getElementById('bar-z')
+        };
+
+        // --- LÓGICA DE CONEXIÓN ---
+        document.getElementById('btn-connect').onclick = () => {
+            const room = document.getElementById('room-input').value.trim().toUpperCase();
+            if (!room) return;
+            currentRoomId = room;
+            socket.emit('join-room', room);
+            
+            lobby.classList.add('hidden');
+            trainer.classList.remove('hidden');
+            document.getElementById('room-tag').textContent = `SALA: ${room}`;
+
+            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                document.getElementById('btn-perms').classList.remove('hidden');
+            } else {
+                startSensors();
+            }
+        };
+
+        document.getElementById('btn-perms').onclick = async () => {
+            const res = await DeviceMotionEvent.requestPermission();
+            if (res === 'granted') {
+                document.getElementById('btn-perms').classList.add('hidden');
+                startSensors();
+            }
+        };
+
+        // --- GRABACIÓN ---
+        function setupRecord(btnId, type) {
+            const btn = document.getElementById(btnId);
+            btn.onclick = () => {
+                if (isRecording) return;
+                
+                isRecording = true;
+                recordType = type;
+                recordedData = [];
+                
+                btn.classList.add('recording');
+                statusMsg.textContent = `🔴 GRABANDO ${type}...`;
+                statusMsg.classList.add('text-red-400');
+                
+                if (navigator.vibrate) navigator.vibrate(50);
+
+                setTimeout(() => {
+                    stopRecording(btn);
+                }, 1500);
+            };
+        }
+
+        setupRecord('btn-record-attack', 'ATAQUE');
+        setupRecord('btn-record-defense', 'DEFENSA');
+
+        function stopRecording(btn) {
+            isRecording = false;
+            btn.classList.remove('recording');
+            statusMsg.textContent = `✅ ${recordType} ENVIADO`;
+            statusMsg.classList.remove('text-red-400');
+            statusMsg.classList.add('text-green-400');
+
+            // Mandamos los logs a la PC
+            socket.emit('game-event', {
+                roomId: currentRoomId,
+                event: 'leviosa-record', 
+                data: recordedData.filter((_, i) => i % 2 === 0).map(d => ({
+                    x: parseFloat(d.x.toFixed(2)),
+                    y: parseFloat(d.y.toFixed(2)),
+                    z: parseFloat(d.z.toFixed(2)),
+                    label: recordType
+                }))
+            });
+
+            if (navigator.vibrate) navigator.vibrate([100, 50]);
+            setTimeout(() => {
+                statusMsg.classList.remove('text-green-400');
+                statusMsg.textContent = "Listo para otra prueba";
+            }, 2000);
+        }
+
+        // --- SENSORES ---
+        function startSensors() {
+            window.addEventListener('devicemotion', (event) => {
+                const acc = event.acceleration || event.accelerationIncludingGravity;
+                if (!acc || acc.x === null) return;
+
+                // Visualización en tiempo real (escala 0-25G aprox)
+                bars.x.style.height = `${Math.min(100, Math.abs(acc.x) * 4)}%`;
+                bars.y.style.height = `${Math.min(100, Math.abs(acc.y) * 4)}%`;
+                bars.z.style.height = `${Math.min(100, Math.abs(acc.z) * 4)}%`;
+
+                if (isRecording) {
+                    recordedData.push({ x: acc.x, y: acc.y, z: acc.z });
+                }
+            });
+        }
+    </script>
+</body>
+</html>
