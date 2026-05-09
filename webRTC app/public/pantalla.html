@@ -26,23 +26,31 @@
 
         #health-container {
             position: fixed;
-            bottom: 0; left: 0; width: 100%; height: 36px; z-index: 1000; pointer-events: none;
+            bottom: 30px;
+            left: 40px;
+            right: 40px;
+            height: 26px;
+            z-index: 1000;
+            pointer-events: none;
+            display: flex;
+            justify-content: space-between;
         }
         .bar-shell {
-            position: absolute; top: 0; height: 100%; width: 55%;
-            background: transparent;
-            border: none; overflow: hidden;
-            box-shadow: none; border-radius: 0;
+            position: relative;
+            height: 100%;
+            width: 42%;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 13px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
         }
         #shell-p1 {
-            left: 0;
-            mask-image: linear-gradient(to right, black 80%, transparent 100%);
-            -webkit-mask-image: linear-gradient(to right, black 80%, transparent 100%);
+            /* Eliminamos la máscara para que se vea el borde redondeado completo */
         }
         #shell-p2 {
-            right: 0;
-            mask-image: linear-gradient(to left, black 80%, transparent 100%);
-            -webkit-mask-image: linear-gradient(to left, black 80%, transparent 100%);
+            /* Eliminamos la máscara para que se vea el borde redondeado completo */
         }
         .bar-shell canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
@@ -257,7 +265,6 @@
                     this.bubbles.push({ x: Math.random()*this.W, y: this.H+Math.random()*this.H, r: 1+Math.random()*2, sp: 0.2+Math.random()*0.4, drift: (Math.random()-0.5)*0.2 });
                 }
                 this.particles = [];
-                this.topPadding = 12;
             }
             
             lerpColor(a, b, t) {
@@ -315,7 +322,7 @@
                 if (hp < this.targetHp) {
                     this.shakeAmt = 8;
                     const th = this.getTheme(hp);
-                    const baseY = this.topPadding + (this.H - this.topPadding) * (1 - hp);
+                    const baseY = (this.H + 20) * (1 - hp) - 10;
                     this.addParticles(this.W*0.4 + Math.random()*this.W*0.2, baseY + 4, th, 9);
                 }
                 this.targetHp = hp;
@@ -327,7 +334,7 @@
                 this.shakeAmt *= 0.88;
                 for (const w of this.waves) w.ph += w.sp;
                 const th = this.getTheme(this.displayHp);
-                const baseY = this.topPadding + (this.H - this.topPadding) * (1 - this.displayHp) + (Math.random()-0.5) * this.shakeAmt;
+                const baseY = (this.H + 20) * (1 - this.displayHp) - 10 + (Math.random()-0.5) * this.shakeAmt;
                 this.ctx.clearRect(0, 0, this.W, this.H);
                 const extraAmp = this.shakeAmt * 0.15;
                 this.drawLayer(baseY, 10, th.c1, extraAmp);
