@@ -16,15 +16,16 @@ if (isProduction) {
     // In production (Render, etc.), SSL is handled by the provider's proxy
     server = http.createServer(app);
 } else {
-    // Local development needs manual SSL for WebRTC/Camera access
+    // Local development: Necesitamos HTTPS para que funcionen los sensores en el navegador del celular
     try {
         const sslOptions = {
             key: fs.readFileSync(path.join(__dirname, 'key.pem')),
             cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
         };
         server = https.createServer(sslOptions, app);
+        console.log('🛡️  Modo Desarrollo: HTTPS habilitado para sensores web.');
     } catch (err) {
-        console.warn('⚠️ No se encontraron certificados SSL locales. Usando HTTP (algunas funciones WebRTC podrían no funcionar localmente).');
+        console.warn('⚠️ No se encontraron certificados SSL locales. Usando HTTP (los sensores NO funcionarán en el navegador).');
         server = http.createServer(app);
     }
 }
@@ -40,16 +41,18 @@ io.on('connection', (socket) => {
 
     // Jugadores: se unen a la sala y disparan handshake WebRTC
     socket.on('join-room', (roomId) => {
-        socket.join(roomId);
-        console.log(`Player ${socket.id} joined room: ${roomId}`);
-        socket.to(roomId).emit('user-joined', socket.id);
+        const room = roomId.toUpperCase();
+        socket.join(room);
+        console.log(`Player ${socket.id} joined room: ${room}`);
+        socket.to(room).emit('user-joined', socket.id);
     });
 
     // Pantalla/Proyector: se une solo para escuchar eventos
     socket.on('screen-join', (roomId) => {
-        socket.join(roomId);
+        const room = roomId.toUpperCase();
+        socket.join(room);
         socket.data.isScreen = true;
-        console.log(`Screen ${socket.id} joined room: ${roomId}`);
+        console.log(`Screen ${socket.id} joined room: ${room}`);
     });
 
     // Señalización WebRTC
@@ -62,7 +65,19 @@ io.on('connection', (socket) => {
 
     // Relay de eventos de juego a la pantalla (hechizos, choques, etc.)
     socket.on('game-event', (data) => {
-        socket.to(data.roomId).emit('game-event', data);
+        const room = data.roomId ? data.roomId.toUpperCase() : null;
+        
+        if (data.event === 'leviosa-debug') {
+            console.log(`[DEBUG] Gesto en sala ${room}: ${data.data.msg}`);
+        }
+        
+        if (data.event === 'leviosa-move') {
+            console.log(`[#${data.seq}] 📱 [TEL] Envía -> dx: ${data.dx?.toFixed(2)} dy: ${data.dy?.toFixed(2)}`);
+        }
+
+        if (room) {
+            socket.to(room).emit('game-event', data);
+        }
     });
 
     socket.on('disconnect', () => {
@@ -78,6 +93,6 @@ server.listen(PORT, '0.0.0.0', () => {
     } else {
         console.log(`📱 Abrir en los teléfonos: https://[TU_IP_LOCAL]:${PORT}`);
         console.log(`🖥️  Pantalla: https://[TU_IP_LOCAL]:${PORT}/pantalla.html?room=SALA`);
-        console.log(`\n⚠️  Aceptar el certificado en el navegador antes de empezar.`);
+        console.log(`\n⚠️  Recuerda aceptar el certificado auto-firmado en el navegador.`);
     }
 });

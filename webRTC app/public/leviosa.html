@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic WebRTC - Wingardium Leviosa</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #010405; font-family: sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        
+        #ui-layer {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        #waiting {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #010405;
+            color: rgba(255,255,255,0.5);
+            font-family: monospace;
+            font-size: 1rem;
+            gap: 1rem;
+            z-index: 100;
+            pointer-events: auto;
+        }
+        #waiting h1 { color: #facc15; font-size: 2.5rem; letter-spacing: 0.1em; text-shadow: 0 0 20px rgba(250, 204, 21, 0.4); }
+        #status {
+            position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+            color: rgba(255,255,255,0.1); font-family: monospace; font-size: 0.7rem; pointer-events: none;
+        }
+
+        canvas#gesture-canvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 60;
+            opacity: 0;
+            transition: opacity 1s;
+        }
+        canvas#gesture-canvas.visible { opacity: 1; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <canvas id="gesture-canvas"></canvas>
+    </div>
+
+    <div id="waiting">
+        <h1>WINGARDIUM LEVIOSA</h1>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+            <input id="manual-room" placeholder="SALA" 
+                style="background:#0a0a0a; border:1px solid #facc15; color:white; padding:0.6rem 1rem; border-radius:4px; font-family:monospace; width:120px; outline:none;">
+            <button onclick="window.connectManual()" 
+                style="background:#facc15; border:none; color:black; padding:0.6rem 1rem; border-radius:4px; cursor:pointer; font-weight:bold;">CONECTAR</button>
+        </div>
+        <p style="opacity:0.5; font-size:0.8rem; margin-top:1rem;">Aula de Encantamientos</p>
+    </div>
+
+    <div id="status">PANTALLA ESPERANDO</div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        let scene, camera, renderer, composer, feather;
+        let targetPosition = new THREE.Vector3(0, -10, 0); 
+        let isFloating = false;
+
+        // Gesture Canvas Logic
+        const gCanvas = document.getElementById('gesture-canvas');
+        const gCtx = gCanvas.getContext('2d');
+        let brushTrail = [];
+
+        function resizeCanvas() {
+            gCanvas.width = window.innerWidth;
+            gCanvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function drawGestureUI() {
+            gCtx.clearRect(0, 0, gCanvas.width, gCanvas.height);
+            
+            if (isFloating) return;
+
+            const cx = gCanvas.width / 2;
+            const cy = gCanvas.height / 2;
+
+            // 1. Dibujar Guía (Swish Convexa + Flick Abajo)
+            gCtx.beginPath();
+            gCtx.moveTo(cx - 150, cy - 50);
+            gCtx.bezierCurveTo(cx - 50, cy + 100, cx + 50, cy + 100, cx + 150, cy - 50);
+            // Flick hacia abajo
+            gCtx.lineTo(cx + 150, cy + 150);
+            
+            gCtx.strokeStyle = "rgba(250, 204, 21, 0.15)";
+            gCtx.lineWidth = 30;
+            gCtx.lineCap = "round";
+            gCtx.stroke();
+
+            // 2. Dibujar trazo del usuario
+            if (brushTrail.length > 1) {
+                gCtx.beginPath();
+                gCtx.moveTo(cx + brushTrail[0].x * 5, cy + brushTrail[0].y * 5);
+                for (let i = 1; i < brushTrail.length; i++) {
+                    gCtx.lineTo(cx + brushTrail[i].x * 5, cy + brushTrail[i].y * 5);
+                }
+                gCtx.strokeStyle = "rgba(250, 204, 21, 0.8)";
+                gCtx.lineWidth = 8;
+                gCtx.shadowBlur = 15;
+                gCtx.shadowColor = "#facc15";
+                gCtx.stroke();
+                gCtx.shadowBlur = 0;
+            }
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x010405, 0.015);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 50;
+            camera.position.y = 10;
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(new RenderPass(scene, camera));
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.2);
+            composer.addPass(bloomPass);
+
+            scene.add(new THREE.AmbientLight(0x222244));
+            const spotLight = new THREE.SpotLight(0xffdd88, 500);
+            spotLight.position.set(0, 30, 20);
+            scene.add(spotLight);
+
+            const geometry = new THREE.CylinderGeometry(0.1, 1.5, 8, 8);
+            geometry.scale(1, 1, 0.1); 
+            const material = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfacc15, emissiveIntensity: 0.8, transparent: true, opacity: 0.9 });
+            feather = new THREE.Mesh(geometry, material);
+            feather.position.set(0, -15, 0);
+            scene.add(feather);
+
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x0a0a0a }));
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.y = -15;
+            scene.add(floor);
+
+            animate();
+            gCanvas.classList.add('visible');
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now() * 0.001;
+
+            drawGestureUI();
+
+            if (isFloating) {
+                feather.position.lerp(targetPosition, 0.05);
+                feather.rotation.z += ((targetPosition.x - feather.position.x) * -0.1 - feather.rotation.z) * 0.1;
+                feather.position.y += Math.sin(time * 2) * 0.02;
+                feather.rotation.y += Math.sin(time * 0.5) * 0.01;
+            } else {
+                feather.position.lerp(new THREE.Vector3(0, -14.5, 0), 0.1);
+                feather.rotation.z = Math.PI / 2;
+            }
+
+            composer.render();
+        }
+
+        const socket = io();
+        let roomId = new URLSearchParams(window.location.search).get('room');
+
+        window.connectManual = () => {
+            const id = document.getElementById('manual-room').value.trim().toUpperCase() || localStorage.getItem('lastRoomId');
+            if (id) { 
+                roomId = id;
+                localStorage.setItem('lastRoomId', id);
+                socket.emit('screen-join', roomId); 
+                document.getElementById('waiting').style.display = 'none'; 
+                document.getElementById('status').textContent = `AULA: ${roomId}`; 
+                init(); 
+            }
+        };
+
+        if (roomId) window.connectManual();
+
+        socket.on('game-event', (data) => {
+            if (data.event === 'leviosa-draw') {
+                if (isFloating) return;
+                brushTrail.push({ x: data.x, y: data.y });
+                if (brushTrail.length > 30) brushTrail.shift();
+            }
+            else if (data.event === 'leviosa-debug') {
+                if (data.data.msg === "GESTURE_COMPLETE") {
+                    console.log("%c ✨ ¡¡¡ HECHIZO ACTIVADO !!! ✨", "color: #facc15; font-size: 20px; font-weight: bold; text-shadow: 0 0 10px rgba(250,204,21,0.5)");
+                    console.log("Trayectoria final capturada:");
+                    console.table(data.data.history.slice(-15)); 
+                    document.getElementById('status').textContent = "✨ ¡HECHIZO ACTIVADO! ✨";
+                } else {
+                    console.log("🛠️ Log de sensor:", data.data.msg);
+                }
+            }
+            else if (data.event === 'leviosa-record') {
+                const jsonStr = JSON.stringify(data.data);
+                console.log("%c ⏺️ GRABACIÓN DE GESTO COMPLETADA:", "color: #facc15; font-size: 16px;");
+                console.log(jsonStr);
+
+                window.recordCount = (window.recordCount || 0) + 1;
+
+                // Crear o actualizar un textarea en pantalla para copiar fácilmente
+                let ta = document.getElementById('record-ta');
+                if (!ta) {
+                    ta = document.createElement('textarea');
+                    ta.id = 'record-ta';
+                    ta.style.position = 'fixed';
+                    ta.style.top = '10%';
+                    ta.style.left = '50%';
+                    ta.style.transform = 'translateX(-50%)';
+                    ta.style.width = '80%';
+                    ta.style.height = '60%'; // Más alto para que quepan varios
+                    ta.style.zIndex = '200';
+                    ta.style.background = 'rgba(0,0,0,0.8)';
+                    ta.style.color = '#0f0';
+                    ta.style.fontFamily = 'monospace';
+                    ta.style.padding = '10px';
+                    
+                    const btn = document.createElement('button');
+                    btn.textContent = 'CERRAR';
+                    btn.style.position = 'fixed';
+                    btn.style.top = '72%';
+                    btn.style.left = '50%';
+                    btn.style.transform = 'translateX(-50%)';
+                    btn.style.zIndex = '200';
+                    btn.style.padding = '10px 20px';
+                    btn.onclick = () => { ta.remove(); btn.remove(); window.recordCount = 0; };
+                    
+                    document.body.appendChild(ta);
+                    document.body.appendChild(btn);
+                }
+                
+                // Agregar al textarea en lugar de sobreescribir
+                if (ta.value === '') {
+                    ta.value = `[  // --- GESTO 1 ---\n  ${jsonStr}`;
+                } else {
+                    ta.value += `,\n  // --- GESTO ${window.recordCount} ---\n  ${jsonStr}`;
+                }
+                
+                document.getElementById('status').textContent = `⏺️ GRABACIÓN ${window.recordCount} RECIBIDA.`;
+            }
+            else if (data.event === 'leviosa-start') {
+                isFloating = true;
+                gCanvas.classList.remove('visible');
+                targetPosition.set(0, 0, 0);
+                feather.material.emissiveIntensity = 3.0;
+                setTimeout(() => { feather.material.emissiveIntensity = 0.8; }, 500);
+            }
+            else if (data.event === 'leviosa-move') {
+                if (!isFloating) return;
+                
+                console.log(`[#${data.seq}] 📦 PC APLICA -> dx: ${data.dx?.toFixed(2)}, dy: ${data.dy?.toFixed(2)}`);
+
+                // Aplicamos la misma sensibilidad de la web original (x20)
+                targetPosition.x = Math.max(-30, Math.min(30, targetPosition.x + data.dx * 20.0));
+                targetPosition.y = Math.max(-10, Math.min(20, targetPosition.y + data.dy * 20.0));
+            }
+            else if (data.event === 'leviosa-drop') {
+                isFloating = false;
+                brushTrail = [];
+                gCanvas.classList.add('visible');
+            }
+        });
+    </script>
+</body>
+</html>

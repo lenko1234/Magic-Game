@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Varita - Wingardium Leviosa</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #000; color: white; touch-action: manipulation; font-family: sans-serif; overflow: hidden; }
+        #app-container { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; text-align: center; }
+        
+        .gesture-area {
+            width: 250px; height: 350px;
+            border: 2px dashed rgba(250, 204, 21, 0.3);
+            border-radius: 20px;
+            display: flex; align-items: center; justify-content: center;
+            margin-bottom: 2rem;
+            position: relative;
+            background: #050505;
+        }
+        
+        .wand-icon {
+            font-size: 4rem;
+            transition: transform 0.2s;
+            position: absolute;
+            z-index: 20;
+        }
+
+        /* Animación del tutorial (Swish cóncavo & Flick Hacia Abajo) */
+        @keyframes swishFlickDown {
+            0% { transform: translate(-30px, -20px) rotate(0deg); opacity: 0; }
+            10% { opacity: 1; }
+            40% { transform: translate(50px, -20px) rotate(20deg); } /* Swish */
+            60% { transform: translate(50px, 80px) rotate(-10deg); } /* Flick DOWN */
+            90% { opacity: 0; }
+            100% { transform: translate(-30px, -20px) rotate(0deg); opacity: 0; }
+        }
+        .tutorial-active .wand-icon {
+            animation: swishFlickDown 2.5s infinite ease-in-out;
+        }
+
+        .flying-mode { border-color: #facc15; box-shadow: 0 0 30px rgba(250, 204, 21, 0.2); }
+        .flying-mode .wand-icon { animation: none; transform: translateY(-20px); filter: drop-shadow(0 0 15px #facc15); opacity: 1; }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        
+        <div id="lobby-view" class="w-full max-w-sm space-y-6">
+            <h1 class="text-3xl font-bold text-yellow-400">LEVIOSA</h1>
+            <input id="room-input" type="text" placeholder="Código de Sala" class="w-full bg-zinc-900 border border-zinc-700 rounded-xl p-4 text-center text-xl text-white uppercase tracking-widest outline-none focus:border-yellow-400">
+            <button id="btn-connect" class="w-full bg-yellow-500 hover:bg-yellow-400 text-black font-bold text-xl py-4 rounded-xl">CONECTAR VARITA</button>
+        </div>
+
+        <div id="game-view" class="hidden w-full max-w-sm flex flex-col items-center">
+            <h2 id="instruction-text" class="text-xl text-zinc-400 mb-8">Haz el gesto:<br><span class="text-white font-bold">Swish (der) & Flick (abajo)</span></h2>
+            
+            <div id="gesture-box" class="gesture-area tutorial-active">
+                <div class="wand-icon">🪄</div>
+            </div>
+
+            <p id="debug-log" class="text-xs text-zinc-600 font-mono mt-8 h-10"></p>
+
+            <!-- Grabación manual para la IA -->
+            <button id="btn-record" class="mt-4 bg-zinc-800 border border-zinc-600 text-white font-bold py-2 px-6 rounded-xl w-full">⏺️ Grabar mi movimiento</button>
+            <p id="record-status" class="text-xs text-zinc-500 mt-2">Para entrenar a la IA</p>
+
+            <button id="btn-request-perms" class="hidden mt-4 text-sm text-yellow-400 underline">Pedir Permisos de Sensor</button>
+        </div>
+
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module">
+        import { LeviosaGestureDetector } from './core/leviosa_math.js';
+
+        const socket = io();
+        let currentRoomId = null;
+        let isLevitating = false;
+        
+        // Recording State
+        let isRecording = false;
+        let recordedData = [];
+        
+        // UI Elements
+        const lobbyView = document.getElementById('lobby-view');
+        const gameView = document.getElementById('game-view');
+        const roomInput = document.getElementById('room-input');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnPerms = document.getElementById('btn-request-perms');
+        const btnRecord = document.getElementById('btn-record');
+        const recordStatus = document.getElementById('record-status');
+        const instructionText = document.getElementById('instruction-text');
+        const gestureBox = document.getElementById('gesture-box');
+        const debugLog = document.getElementById('debug-log');
+        
+        // Brush state for sending to PC
+        let brushX = 0;
+        let brushY = 0;
+
+        function log(msg) {
+            debugLog.textContent = msg;
+            console.log(msg);
+        }
+
+        // --- MODO GRABACIÓN ---
+        btnRecord.addEventListener('click', () => {
+            if (isRecording) return;
+            isRecording = true;
+            recordedData = [];
+            btnRecord.textContent = "🔴 GRABANDO...";
+            btnRecord.classList.replace('bg-zinc-800', 'bg-red-600');
+            recordStatus.textContent = "¡Haz el gesto ahora!";
+            if (navigator.vibrate) navigator.vibrate(50);
+
+            // Grabar por 1.5 segundos
+            setTimeout(() => {
+                isRecording = false;
+                btnRecord.textContent = "⏺️ Grabar otro movimiento";
+                btnRecord.classList.replace('bg-red-600', 'bg-zinc-800');
+                recordStatus.textContent = "Grabación enviada. Puedes grabar más.";
+                
+                // Reducir la resolución de los datos para no saturar el chat (1 de cada 2 frames)
+                const downsampled = recordedData.filter((_, i) => i % 2 === 0).map(d => ({
+                    x: parseFloat(d.x.toFixed(2)),
+                    y: parseFloat(d.y.toFixed(2)),
+                    z: parseFloat(d.z.toFixed(2))
+                }));
+
+                socket.emit('game-event', {
+                    roomId: currentRoomId,
+                    event: 'leviosa-record',
+                    data: downsampled
+                });
+                if (navigator.vibrate) navigator.vibrate([100, 100]);
+            }, 1500);
+        });
+
+        // Initialize Detector
+        const detector = new LeviosaGestureDetector({
+            timeWindow: 1000, 
+            swishThreshold: 12, 
+            flickThreshold: 15  
+        });
+
+        detector.onDebug = (data) => {
+            socket.emit('game-event', {
+                roomId: currentRoomId,
+                event: 'leviosa-debug',
+                data: data
+            });
+        };
+
+        detector.onGestureComplete = () => {
+            log('✨ ¡Wingardium Leviosa Exitoso!');
+            if (navigator.vibrate) navigator.vibrate([100, 50, 200]);
+            
+            isLevitating = true;
+            
+            // Update UI
+            gestureBox.classList.remove('tutorial-active');
+            gestureBox.classList.add('flying-mode');
+            instructionText.innerHTML = '<span class="text-yellow-400">¡Levitando!</span><br>Mueve tu celular para dirigirla';
+
+            // Send event to PC
+            socket.emit('game-event', { roomId: currentRoomId, event: 'leviosa-start', jugador: 1 });
+        };
+
+        // Network Setup
+        btnConnect.addEventListener('click', async () => {
+            const id = roomInput.value.trim().toUpperCase();
+            if (!id) return;
+            
+            currentRoomId = id;
+            socket.emit('join-room', id);
+            
+            lobbyView.classList.add('hidden');
+            gameView.classList.remove('hidden');
+
+            // Request iOS Sensor Permissions if needed
+            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                btnPerms.classList.remove('hidden');
+            } else {
+                startSensors();
+            }
+        });
+
+        btnPerms.addEventListener('click', async () => {
+            try {
+                const response = await DeviceMotionEvent.requestPermission();
+                if (response === 'granted') {
+                    btnPerms.classList.add('hidden');
+                    startSensors();
+                } else {
+                    alert('Se necesitan permisos para la varita.');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        });
+
+        // Gyroscope tracking for steering
+        let lastX = 0, lastY = 0;
+        
+        function startSensors() {
+            window.addEventListener('devicemotion', (event) => {
+                const acc = event.acceleration || event.accelerationIncludingGravity;
+                
+                if (isRecording && acc) {
+                    recordedData.push({ x: acc.x, y: acc.y, z: acc.z });
+                }
+
+                if (!isLevitating) {
+                    detector.processMotion(event);
+
+                    // Visualize acceleration by moving the brush on PC
+                    if (acc) {
+                        brushX += (acc.x * 2);
+                        brushY -= (acc.y * 2); 
+
+                        // Friction and boundary limits
+                        brushX += (0 - brushX) * 0.05; // Pull back to center 0,0
+                        brushY += (0 - brushY) * 0.05;
+
+                        // Send to PC
+                        socket.emit('game-event', {
+                            roomId: currentRoomId,
+                            event: 'leviosa-draw',
+                            x: brushX,
+                            y: brushY
+                        });
+                    }
+                } else {
+                    // Send continuous steering data
+                    let dx = 0; let dy = 0;
+                    if (event.rotationRate && event.rotationRate.beta !== null) {
+                        dx = event.rotationRate.alpha * -0.1; 
+                        dy = event.rotationRate.beta * -0.1; 
+                    } else {
+                        const acc = event.accelerationIncludingGravity;
+                        if (acc) {
+                            dx = (acc.x - lastX); 
+                            dy = (acc.y - lastY);
+                            lastX = acc.x; lastY = acc.y;
+                        }
+                    }
+
+                    // Only send if there is significant movement
+                    if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+                        socket.emit('game-event', {
+                            roomId: currentRoomId,
+                            event: 'leviosa-move',
+                            dx: dx,
+                            dy: dy
+                        });
+                    }
+                }
+            });
+        }
+
+        // Tap to drop the feather
+        gestureBox.addEventListener('click', () => {
+            if (isLevitating) {
+                isLevitating = false;
+                gestureBox.classList.remove('flying-mode');
+                gestureBox.classList.add('tutorial-active');
+                instructionText.innerHTML = 'Haz el gesto:<br><span class="text-white font-bold">Swish (der) & Flick (abajo)</span>';
+                socket.emit('game-event', { roomId: currentRoomId, event: 'leviosa-drop' });
+                detector.reset();
+                brushX = 0; brushY = 0;
+                if (navigator.vibrate) navigator.vibrate(50);
+            }
+        });
+
+    </script>
+</body>
+</html>
