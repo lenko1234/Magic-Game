@@ -592,27 +592,45 @@ const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let sounds = {};
 
 // ----------------------------------------------------------------
-// AUDIO UNLOCK
-// El AudioContext se crea suspendido en HTTPS/producción (política
-// de navegadores). iOS Safari exige que resume() se llame dentro de
-// un gesto de usuario. devicemotion NO cuenta como gesto, así que
-// los hechizos propios tampoco pueden desbloquear el audio.
-//
-// Solución: guardar la Promise de resume() para que playSound()
-// pueda esperarla aunque el evento que disparó el sonido no sea
-// un gesto. El buffer silencioso se juega DESPUÉS de que el
-// contexto queda en 'running' (dentro del .then), no antes.
+// PRE-FETCH: descargamos los archivos de audio como ArrayBuffers
+// crudos al cargar la página. NO llamamos a decodeAudioData() acá
+// porque en iOS Safari, decodificar con un AudioContext suspendido
+// devuelve buffers de CEROS (silencio total, sin error).
 // ----------------------------------------------------------------
-let _audioUnlocked = false;
-let _audioUnlockPromise = null; // Promise del resume(), para que playSound() pueda esperarla
+const _rawAudio = {};
+
+async function _prefetchSound(name, url) {
+    try {
+        const response = await fetch(url);
+        _rawAudio[name] = await response.arrayBuffer();
+    } catch (e) { console.warn(`Sound ${name} prefetch failed:`, e); }
+}
+
+// Descargar inmediatamente (solo red, no necesita AudioContext)
+_prefetchSound('expelliarmus', 'sounds/expelliarmus.wav');
+_prefetchSound('desmaius',     'sounds/desmaius.wav');
+_prefetchSound('protego',      'sounds/protego.wav');
+_prefetchSound('accio',        'sounds/accio.wav');
+
+// ----------------------------------------------------------------
+// AUDIO UNLOCK + DECODE
+// iOS Safari exige que resume() se llame dentro de un gesto de
+// usuario. devicemotion NO cuenta como gesto.
+//
+// Flujo:
+// 1. Usuario toca la pantalla (lobby, botón, lo que sea)
+// 2. resume() arranca y resuelve → contexto en 'running'
+// 3. AHORA decodificamos los ArrayBuffers pre-descargados
+// 4. playSound() espera esta Promise si los sonidos no están listos
+// ----------------------------------------------------------------
+let _audioReady = false;
+let _audioReadyPromise = null;
 
 function _unlockAudio() {
-    if (_audioUnlocked || _audioUnlockPromise) return;
+    if (_audioReady || _audioReadyPromise) return;
 
-    _audioUnlockPromise = audioCtx.resume().then(() => {
-        // Buffer silencioso de 1 muestra: trick estándar de iOS Safari
-        // para "despertar" la pipeline de audio. DEBE ir dentro del .then
-        // para que el contexto ya esté en 'running' al momento de start().
+    _audioReadyPromise = audioCtx.resume().then(async () => {
+        // Buffer silencioso: trick estándar para "despertar" iOS Safari
         try {
             const silentBuf = audioCtx.createBuffer(1, 1, 22050);
             const silentSrc = audioCtx.createBufferSource();
@@ -620,11 +638,21 @@ function _unlockAudio() {
             silentSrc.connect(audioCtx.destination);
             silentSrc.start(0);
         } catch(e) {}
-        _audioUnlocked = true;
-        console.log('🔊 Audio desbloqueado. Estado:', audioCtx.state);
+
+        // Decodificar los sonidos AHORA que el contexto está 'running'.
+        // .slice(0) porque decodeAudioData detaches el ArrayBuffer original.
+        const entries = Object.entries(_rawAudio);
+        await Promise.all(entries.map(async ([name, buf]) => {
+            try {
+                sounds[name] = await audioCtx.decodeAudioData(buf.slice(0));
+            } catch(e) { console.warn(`Sound ${name} decode failed:`, e); }
+        }));
+
+        _audioReady = true;
+        console.log('🔊 Audio listo. Estado:', audioCtx.state, '| Sonidos:', Object.keys(sounds).join(', '));
     }).catch(e => {
-        _audioUnlockPromise = null; // Permitir reintento en el próximo gesto
-        console.warn('⚠️ Error al desbloquear AudioContext:', e);
+        _audioReadyPromise = null; // Permitir reintento en el próximo gesto
+        console.warn('⚠️ Error al inicializar audio:', e);
     });
 }
 
@@ -634,36 +662,21 @@ function _unlockAudio() {
     document.addEventListener(evt, _unlockAudio, { capture: true, passive: true })
 );
 
-async function loadSound(name, url) {
-    try {
-        const response = await fetch(url);
-        const arrayBuffer = await response.arrayBuffer();
-        sounds[name] = await audioCtx.decodeAudioData(arrayBuffer);
-    } catch (e) { console.warn(`Sound ${name} no cargado:`, e); }
-}
-
-loadSound('expelliarmus', 'sounds/expelliarmus.wav');
-loadSound('desmaius',     'sounds/desmaius.wav');
-loadSound('protego',      'sounds/protego.wav');
-loadSound('accio',        'sounds/accio.wav');
-
 async function playSound(tipo, isMine) {
-    if (!sounds[tipo]) return null;
-
-    // Si el contexto no está 'running', esperamos la Promise del unlock.
-    // Caso típico en iOS: el gesto ya ocurrió (toque en lobby) pero resume()
-    // aún no resolvió cuando llega el primer hechizo por devicemotion.
-    if (audioCtx.state !== 'running') {
-        if (_audioUnlockPromise) {
-            await _audioUnlockPromise;
+    // Esperar a que el audio esté completamente listo (unlock + decode).
+    // Esto cubre el caso donde el primer hechizo se dispara por devicemotion
+    // antes de que los sonidos terminen de decodificarse.
+    if (!_audioReady) {
+        if (_audioReadyPromise) {
+            await _audioReadyPromise;
         } else {
-            console.warn('⚠️ AudioContext suspendido y sin unlock iniciado. Tocá la pantalla primero.');
+            console.warn('⚠️ Audio no inicializado. Tocá la pantalla primero.');
             return null;
         }
     }
-    // Verificación final: si después del await sigue sin estar running, abortamos.
-    if (audioCtx.state !== 'running') {
-        console.warn('⚠️ AudioContext no pudo activarse. Estado:', audioCtx.state);
+
+    if (!sounds[tipo]) {
+        console.warn(`⚠️ Sonido '${tipo}' no disponible.`);
         return null;
     }
 
