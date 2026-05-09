@@ -42,9 +42,13 @@
             transform: translate3d(-50%, 0, 0);
             width: 200%;
             height: 900px;
-            background: radial-gradient(circle at center, rgba(147, 51, 234, 0.9) 0%, rgba(147, 51, 234, 0.2) 50%, transparent 75%);
-            filter: blur(120px);
+            /* El radial-gradient ya tiene bordes suaves incorporados.
+               filter:blur() de 120px mataba las transiciones en mobile:
+               el GPU no podía animar la opacidad frame a frame mientras
+               recalculaba el blur, así que la luz "saltaba" de golpe. */
+            background: radial-gradient(circle at center, rgba(147, 51, 234, 0.85) 0%, rgba(147, 51, 234, 0.35) 35%, rgba(147, 51, 234, 0.1) 60%, transparent 80%);
             opacity: 0;
+            will-change: opacity, transform;
             transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1), transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
             pointer-events: none;
             z-index: 0;
@@ -556,8 +560,6 @@ let isProtected = false;
 let isDisarmed = false;
 let spellCooldown = false;
 let isInClash = false;
-let recognitionRunning = false;
-let recognition;
 let motionHandler = null;
 let motionDebugInterval = null;
 let lastMotionValue = 0;
@@ -594,9 +596,13 @@ loadSound('desmaius',     'sounds/desmaius.wav');
 loadSound('protego',      'sounds/protego.wav');
 loadSound('accio',        'sounds/accio.wav');
 
-function playSound(tipo, isMine) {
+async function playSound(tipo, isMine) {
     if (!sounds[tipo]) return null;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    // FIX #2: Esperar a que el AudioContext esté activo antes de arrancar.
+    // Sin el await, source.start() se ejecuta con currentTime=0 y el audio
+    // se descarta o llega desfasado respecto al feedback visual.
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
 
     const source = audioCtx.createBufferSource();
     source.buffer = sounds[tipo];
@@ -656,6 +662,11 @@ const spellColors = {
     'protego':      'radial-gradient(circle at center, rgba(6, 182, 212, 0.9) 0%, rgba(8, 145, 178, 0.3) 50%, transparent 75%)'
 };
 
+// FIX #1: Guardar el timer del feedback visual para poder cancelarlo.
+// Sin esto, si se disparan dos hechizos rápido (rebote del sensor), quedan
+// dos setTimeout solapados que dejan la luz encendida el doble de tiempo.
+let _feedbackTimer = null;
+
 function showVisualFeedback(tipo) {
     const glow = document.getElementById('glow');
     glow.style.background = spellColors[tipo];
@@ -664,7 +675,9 @@ function showVisualFeedback(tipo) {
     
     const duration = (tipo === 'protego') ? 1500 : 800;
     
-    setTimeout(() => {
+    if (_feedbackTimer) clearTimeout(_feedbackTimer);
+    _feedbackTimer = setTimeout(() => {
+        _feedbackTimer = null;
         document.getElementById('combat').classList.remove('is-illuminated');
         setSpellStatus('');
     }, duration);
@@ -831,6 +844,11 @@ function startClash() {
         }, CLASH_DURATION_MS);
     }
 
+    // FIX #3: Limpiar el interval anterior antes de crear uno nuevo.
+    // Si startClash() se llama dos veces (host + relay del cliente),
+    // sin esto quedan dos intervals corriendo indefinidamente.
+    if (motionDebugInterval) { clearInterval(motionDebugInterval); motionDebugInterval = null; }
+
     motionDebugInterval = setInterval(() => {
         if (isInClash) {
             if (myClashLightning) {
@@ -921,38 +939,6 @@ function initGlobalMotion() {
 
 function stopClashMotion() {
     if (motionDebugInterval) { clearInterval(motionDebugInterval); motionDebugInterval = null; }
-}
-
-// ----------------------------------------------------------------
-// VOICE RECOGNITION (copiado del legacy)
-// ----------------------------------------------------------------
-function startVoiceRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
-    recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    recognition.onresult = (event) => {
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-            if (spellCooldown) break;
-            const transcript = event.results[i][0].transcript.trim().toLowerCase();
-            if (event.results[i].isFinal) {
-                if      (transcript.includes('expelli') || transcript.includes('peli') || transcript.includes('expoli') || transcript.includes('palermo')) triggerSpell('expelliarmus');
-                else if (transcript.includes('accio'))                                                                                                      triggerSpell('accio');
-                else if (transcript.includes('desmai') || transcript.includes('desmay') || transcript.includes('mayo'))                                     triggerSpell('desmaius');
-                else if (transcript.includes('proteg') || transcript.includes('potato') || transcript.includes('prego') || transcript.includes('tego'))     triggerSpell('protego');
-            } else {
-                setSpellStatus(transcript);
-            }
-        }
-    };
-
-    recognition.onend = () => { if (recognitionRunning) recognition.start(); };
-    recognitionRunning = true;
-    recognition.start();
 }
 
 // ----------------------------------------------------------------
@@ -1090,7 +1076,6 @@ function enterCombat() {
         myHealthBar.start();
     }
     
-    startVoiceRecognition();
     initGlobalMotion();
 }
 
