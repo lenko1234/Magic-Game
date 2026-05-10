@@ -84,25 +84,37 @@
 
         /* ---- CLASH UI ---- */
         #clash-scene {
-            display: none; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 15%;
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 50;
-            background: rgba(6, 4, 15, 0.85); backdrop-filter: blur(5px);
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            display: none;
+            background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%);
+            z-index: 50;
         }
-        #clash-scene.visible { display: flex; }
-        canvas#bolt { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
-        #bar-wrap {
-            width: 80%; max-width: 400px; height: 14px; background: rgba(15,10,26,0.8); border-radius: 7px;
-            border: 1px solid #1e1035; overflow: hidden; position: relative; z-index: 10;
+        #clash-scene.visible { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        
+        #bolt { width: 100%; height: 100%; display: block; mix-blend-mode: screen; position: absolute; top: 0; left: 0; pointer-events: none; }
+        
+        .ui-container {
+            position: absolute;
+            bottom: 80px; left: 0; width: 100%;
+            text-align: center;
+            pointer-events: none;
+            z-index: 60;
+        }
+        #bar-container {
+            width: 80%; max-width: 400px; height: 15px;
+            background: rgba(0,0,0,0.5);
+            margin: 0 auto; border-radius: 10px;
+            overflow: hidden; border: 2px solid rgba(255,255,255,0.2);
+            box-shadow: 0 0 15px rgba(0,0,0,0.8);
         }
         #bar-fill {
-            height: 100%; border-radius: 7px;
+            width: 100%; height: 100%;
             background: linear-gradient(90deg, #7c3aed, #a855f7);
-            transition: width 0.15s, background 0.2s; width: 100%;
+            transition: width 0.1s linear, background 0.3s ease;
         }
-        #clash-msg {
-            position: relative; z-index: 10; font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase;
-            color: #a855f7; margin-top: 20px; font-weight: bold; text-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
-        }
+        #clash-msg { margin-top: 15px; font-weight: bold; font-size: 1.5rem; letter-spacing: 2px; text-shadow: 0 2px 10px rgba(0,0,0,0.8); color: white; }
 
         .btn-spell { transition: transform 0.1s ease; }
         .btn-spell:active { transform: scale(0.9); }
@@ -240,8 +252,10 @@
     <!-- CLASH UI -->
     <div id="clash-scene">
         <canvas id="bolt"></canvas>
-        <div id="bar-wrap"><div id="bar-fill"></div></div>
-        <div id="clash-msg">¡MANTÉN FIRME!</div>
+        <div class="ui-container">
+            <div id="bar-container"><div id="bar-fill"></div></div>
+            <div id="clash-msg">¡PREPÁRATE!</div>
+        </div>
     </div>
 
     <div id="health-bar-container">
@@ -439,6 +453,10 @@ class ClashLightning {
         this.W = 0; this.H = 0;
         this.stress = 0; this.targetStress = 0;
         this.sparks = [];
+        this.t = 0;
+        this.lastUpdate = 0;
+        this.boltPath = [];
+        this.branches = [];
         this.animFrame = null;
         this.active = false;
         
@@ -446,6 +464,7 @@ class ClashLightning {
         window.addEventListener('resize', this.resize);
         this.resize();
     }
+    
     resize() {
         if (!this.scene) return;
         this.W = window.innerWidth;
@@ -453,108 +472,176 @@ class ClashLightning {
         this.canvas.width = this.W;
         this.canvas.height = this.H;
     }
-    boltSegs(x1,y1,x2,y2,rough,depth) {
-        if (depth > 6) return [{x1,y1,x2,y2}];
-        const mx=(x1+x2)/2+(Math.random()-0.5)*rough;
-        const my=(y1+y2)/2+(Math.random()-0.5)*rough;
-        return [...this.boltSegs(x1,y1,mx,my,rough*0.6,depth+1),...this.boltSegs(mx,my,x2,y2,rough*0.6,depth+1)];
-    }
-    generateBolt() {
-        const cx = this.W / 2;
-        const spread = 20 + this.stress * 100;
-        const rough = 15 + this.stress * 60;
-        
-        const sx = cx + (Math.random() - 0.5) * spread * 0.5;
-        const ex = cx + (Math.random() - 0.5) * spread;
-        
-        const color = this.stress > 0.6 ? `rgba(255,${Math.floor(80 - this.stress * 60)},${Math.floor(80 - this.stress * 60)},`
-            : this.stress > 0.3 ? `rgba(220,${Math.floor(160 - this.stress * 100)},255,` : `rgba(180,130,255,`;
-            
-        // El rayo va de abajo (this.H) hacia arriba (0)
-        return { 
-            segs: this.boltSegs(sx, this.H, ex, 0, rough, 0), 
-            alpha: 0.6 + this.stress * 0.4, 
-            width: 3 + this.stress * 8, 
-            color 
-        };
-    }
-    addSparks(n) {
-        const cx = this.W / 2 + (Math.random() - 0.5) * 60 * this.stress;
-        // Chispas salen de varias partes del rayo (más o menos en la mitad)
-        const cy = this.H * Math.random();
+    
+    addSparks(n, cx, cy) {
         for (let i=0; i<n; i++) {
             const a = Math.random() * Math.PI * 2;
-            const sp = (1 + Math.random() * 3) * (0.5 + this.stress * 1.5);
-            this.sparks.push({x:cx, y:cy, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-1, life:1, r:1+Math.random()*2, color:this.stress>0.5?'#f87171':'#c084fc'});
+            const sp = (1 + Math.random() * 6) * (0.5 + this.stress * 2);
+            this.sparks.push({
+                x: cx, y: cy, 
+                vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, 
+                life: 1, r: 0.5 + Math.random() * 2, 
+                color: Math.random() > 0.5 ? '#fff' : (this.stress > 0.5 ? '#fca5a5' : '#e9d5ff')
+            });
         }
     }
+    
     setStress(val) {
         this.targetStress = Math.min(1, val / 6);
     }
+    
     updateTimeBar(progress) {
         const fill = document.getElementById('bar-fill');
         if (fill) fill.style.width = Math.max(0, (100 - progress * 100)) + '%';
     }
+
+    // Generador del camino (zigzag centrado, con amplitud acotada)
+    generateMainPath(startX, startY, endY, segments, maxJitter) {
+        let path = [{x: startX, y: startY}];
+        let stepY = (endY - startY) / segments;
+
+        for (let i = 1; i < segments; i++) {
+            let dx = (Math.random() - 0.5) * maxJitter;
+            path.push({x: startX + dx, y: startY + i * stepY});
+        }
+        path.push({x: startX, y: endY});
+        return path;
+    }
+
     draw() {
         if (!this.active) return;
+        this.t += 0.016; 
+        
         this.stress += (this.targetStress - this.stress) * 0.15;
         if (Math.abs(this.targetStress - this.stress) < 0.001) this.stress = this.targetStress;
-        this.targetStress *= 0.97;
+        this.targetStress *= 0.96;
 
-        this.ctx.clearRect(0,0,this.W,this.H);
-
-        // Generar un solo rayo constante por frame
-        const b = this.generateBolt();
+        this.ctx.globalCompositeOperation = 'source-over';
+        this.ctx.clearRect(0, 0, this.W, this.H);
         
-        // Glow exterior
-        this.ctx.lineWidth = b.width * 3;
-        for (const s of b.segs) {
-            this.ctx.beginPath(); this.ctx.moveTo(s.x1, s.y1); this.ctx.lineTo(s.x2, s.y2);
-            this.ctx.strokeStyle = b.color + (b.alpha * 0.3) + ')'; this.ctx.stroke();
-        }
-        // Núcleo brillante
-        this.ctx.lineWidth = b.width;
-        for (const s of b.segs) {
-            this.ctx.beginPath(); this.ctx.moveTo(s.x1, s.y1); this.ctx.lineTo(s.x2, s.y2);
-            this.ctx.strokeStyle = '#ffffff'; 
-            this.ctx.stroke();
-            // Segundo trazo para darle el color primario encima del blanco
-            this.ctx.strokeStyle = b.color + b.alpha + ')'; 
-            this.ctx.stroke();
+        this.ctx.globalCompositeOperation = 'screen';
+        this.ctx.lineCap = 'round';
+        this.ctx.lineJoin = 'miter'; 
+
+        const colorR = this.stress > 0.6 ? 255 : this.stress > 0.3 ? 220 : 180;
+        const colorG = this.stress > 0.6 ? Math.floor(50 - this.stress * 40) : this.stress > 0.3 ? Math.floor(120 - this.stress * 80) : 100;
+        const colorB = this.stress > 0.6 ? Math.floor(50 - this.stress * 40) : 255;
+        const neonColor = `rgb(${colorR},${colorG},${colorB})`;
+        const coreColor = '#ffffff';
+
+        const cx = this.W / 2;
+        
+        // Acelera la frecuencia de redibujado con el estrés (hace que vibre rapidísimo)
+        const updateInterval = 0.08 - (this.stress * 0.06); 
+        
+        if (this.t - this.lastUpdate > updateInterval) {
+            this.lastUpdate = this.t;
+            
+            // RAYO PRINCIPAL: Se vuelve un poco más quebrado, pero no más ancho
+            const mainSegments = Math.floor(10 + Math.random() * 4 + (this.stress * 2));
+            const mainJitter = 12 + this.stress * 10; // Amplitud muy contenida
+            this.boltPath = this.generateMainPath(cx, 0, this.H, mainSegments, mainJitter);
+
+            // RAYITOS SECUNDARIOS
+            this.branches = [];
+            const numBranches = 1 + Math.floor(this.stress * 3);
+            
+            for (let i = 0; i < numBranches; i++) {
+                // ALBOROTO: Quiebres mínimos, apenas suben con el estrés para mantenerlo realista
+                const secSegments = Math.floor(10 + Math.random() * 4 + (this.stress * 2)); 
+                // Pero su amplitud (Jitter) se mantiene muy cercana al rayo principal
+                const secJitter = 15 + this.stress * 15; 
+                this.branches.push(this.generateMainPath(cx, 0, this.H, secSegments, secJitter));
+            }
         }
 
-        if (this.stress > 0.3) this.addSparks(Math.floor(1 + this.stress * 4));
+        const drawBolt = (path, width, color, microJitter = 0) => {
+            if (!path || path.length < 2) return;
+            this.ctx.beginPath();
+            this.ctx.moveTo(path[0].x, path[0].y);
+            for (let i = 1; i < path.length; i++) {
+                let mx = path[i].x + (Math.random() - 0.5) * microJitter;
+                let my = path[i].y + (Math.random() - 0.5) * microJitter;
+                this.ctx.lineTo(mx, my);
+            }
+            this.ctx.lineWidth = width;
+            this.ctx.strokeStyle = color;
+            this.ctx.stroke();
+        };
 
+        const isBlankFrame = Math.random() > 0.85 && this.stress < 0.7;
+
+        if (this.boltPath.length > 0 && !isBlankFrame) {
+            // Tronco Principal
+            drawBolt(this.boltPath, 8 + this.stress * 6, neonColor, 1);
+            drawBolt(this.boltPath, 2 + this.stress * 3, coreColor, 0);
+
+            // Rayitos secundarios (Orbitan muy de cerca y vibran más intensamente)
+            for (let branch of this.branches) {
+                if (Math.random() > 0.2) {
+                    drawBolt(branch, 3 + this.stress * 3, neonColor, 2 + this.stress * 3); // Más microJitter
+                    drawBolt(branch, 1, coreColor, 0);
+                }
+            }
+            
+            if (this.stress > 0.2 && Math.random() > 0.5) {
+                const rIdx = Math.floor(Math.random() * this.boltPath.length);
+                this.addSparks(Math.floor(1 + this.stress * 2), this.boltPath[rIdx].x, this.boltPath[rIdx].y);
+            }
+        }
+
+        // --- ACTUALIZAR CHISPAS ---
+        this.ctx.globalCompositeOperation = 'screen';
         for (const s of this.sparks) {
-            s.x += s.vx; s.y += s.vy; s.vy += 0.12; s.life -= 0.05;
-            this.ctx.beginPath(); this.ctx.arc(s.x, s.y, Math.max(0.1, s.r * s.life), 0, Math.PI * 2);
-            this.ctx.fillStyle = s.color; this.ctx.globalAlpha = s.life; this.ctx.fill(); this.ctx.globalAlpha = 1;
+            s.x += s.vx; 
+            s.y += s.vy; 
+            s.vy += 0.3; 
+            s.life -= 0.04 + Math.random() * 0.03; 
+            
+            if (s.life > 0) {
+                this.ctx.beginPath(); 
+                this.ctx.moveTo(s.x, s.y);
+                this.ctx.lineTo(s.x - s.vx * 1.5, s.y - s.vy * 1.5);
+                this.ctx.lineWidth = Math.max(0.5, s.r * s.life);
+                this.ctx.strokeStyle = s.color;
+                this.ctx.globalAlpha = s.life; 
+                this.ctx.stroke();
+            }
         }
+        this.ctx.globalAlpha = 1;
         this.sparks = this.sparks.filter(s => s.life > 0);
 
         const fill = document.getElementById('bar-fill');
         if (fill) fill.style.background = this.stress > 0.6 ? 'linear-gradient(90deg,#7f1d1d,#ef4444)' : this.stress > 0.3 ? 'linear-gradient(90deg,#7c3aed,#f97316)' : 'linear-gradient(90deg,#7c3aed,#a855f7)';
 
         const msg = document.getElementById('clash-msg');
-        if (msg) msg.textContent = this.stress < 0.05 ? 'quieto...' : this.stress < 0.3 ? 'cuidado...' : this.stress < 0.6 ? '¡temblando!' : '¡fuera de control!';
+        if (msg) msg.textContent = this.stress < 0.1 ? '¡MOVETE!' : this.stress < 0.4 ? '¡MÁS FUERTE!' : this.stress < 0.7 ? '¡ESO!' : '¡PODER MÁXIMO!';
+        
+        // this.updateTimeBar(1 - this.stress); // Eliminado: el usuario quiere que sea de tiempo, no de estrés
 
         this.animFrame = requestAnimationFrame(() => this.draw());
     }
+
     start() {
         if (this.active) return;
         this.active = true;
         this.scene.classList.add('visible');
         this.resize();
+        this.lastUpdate = 0;
         this.draw();
     }
+
     stop() {
         this.active = false;
         this.scene.classList.remove('visible');
         if (this.animFrame) cancelAnimationFrame(this.animFrame);
         this.sparks = [];
+        this.boltPath = [];
+        this.branches = [];
         this.ctx.clearRect(0,0,this.W,this.H);
     }
 }
+
 
 let myClashLightning;
 let myHealthBar;
@@ -909,12 +996,12 @@ function startClash() {
             const myTotal = myMotionBuffer.reduce((a, b) => a + b, 0);
             const rivalTotal = rivalMotionBuffer.reduce((a, b) => a + b, 0);
             
-            // El que más se mueve (mayor inestabilidad) pierde
+            // El que más se mueve (mayor inestabilidad) gana
             let loser;
             if (myTotal > rivalTotal) {
-                loser = 1; // Host pierde
+                loser = 2; // Cliente pierde (Host gana)
             } else if (rivalTotal > myTotal) {
-                loser = 2; // Cliente pierde
+                loser = 1; // Host pierde (Cliente gana)
             } else {
                 loser = Math.random() > 0.5 ? 1 : 2; // Empate -> azar
             }
@@ -940,7 +1027,7 @@ function startClash() {
             if (myClashLightning) {
                 myClashLightning.setStress(lastMotionValue);
                 const progress = Math.min(1, (Date.now() - clashStartTime) / CLASH_DURATION_MS);
-                myClashLightning.updateTimeBar(progress);
+                myClashLightning.updateTimeBar(progress); 
             }
         }
     }, 100);
