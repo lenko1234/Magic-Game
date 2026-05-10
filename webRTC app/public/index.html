@@ -984,23 +984,34 @@ function checkGesture(e) {
     if (magnitude > FLICK_THRESHOLD && (Date.now() - lastFlickTime > 1200)) {
         analyzingGesture = true;
         
-        // Esperamos 150ms extra para capturar el "rebote" o latigazo completo en el buffer
+        // Esperamos 150ms extra para capturar el gesto completo
         setTimeout(() => {
             let maxX = -Infinity, minX = Infinity, maxY = -Infinity;
+            let firstSignificantX = 0; // Guardará el primer movimiento fuerte en X
+
             for (let frame of gestureBuffer) {
                 if (frame.x > maxX) maxX = frame.x;
                 if (frame.x < minX) minX = frame.x;
                 if (frame.y > maxY) maxY = frame.y;
+                
+                // Buscamos el primer instante donde la fuerza en X supere los 15G (positivo o negativo)
+                if (firstSignificantX === 0 && Math.abs(frame.x) > 15) {
+                    firstSignificantX = frame.x;
+                }
             }
 
             let tipo = '';
             
-            // --- NUEVO CEREBRO DEL DETECTOR ---
-            // Basado en los logs:
-            // ATAQUE: Latigazo violento. Alcanza minX < -40 o maxY > 40 o maxX > 25.
-            // DEFENSA: Movimiento de escudo firme. minX llega a -35, pero NUNCA tiene picos de Y > 40 ni X > 25.
-            if (minX < -38 || maxY > 39 || maxX > 25) {
-                // Evitar repetir el mismo hechizo ofensivo dos veces seguidas
+            // --- CEREBRO DEL DETECTOR v3 (Secuencia Temporal) ---
+            // Los logs revelaron el secreto: la intensidad de ambos movimientos es altísima, pero el ORDEN es distinto.
+            // ATAQUE (Atrás a adelante): El brazo gira hacia afuera primero. El primer pico fuerte de X es POSITIVO.
+            // DEFENSA (Derecha a izquierda): El brazo cruza hacia adentro primero. El primer pico fuerte de X es NEGATIVO.
+            // Si hacemos un Protego súper fuerte, el brazo rebota y genera un X positivo gigante, pero ocurre DESPUÉS del negativo.
+            // NUEVO FILTRO: Si el sensor se "durmió" y solo grabó la mitad del rebote (falso ataque), lo detectamos
+            // porque todo Ataque real siempre tiene un latigazo final negativo (minX < -20). Si falta, es Protego.
+            
+            if ((firstSignificantX > 0 || (firstSignificantX === 0 && maxY > 40)) && minX < -20) {
+                // El primer movimiento fuerte fue hacia afuera y hubo latigazo final -> ATAQUE
                 let newSpell;
                 do {
                     newSpell = offensiveSpells[Math.floor(Math.random() * offensiveSpells.length)];
@@ -1009,10 +1020,24 @@ function checkGesture(e) {
                 tipo = newSpell;
                 lastOffensiveSpell = newSpell;
             } else {
+                // El primer movimiento fuerte fue hacia adentro (Protego)
                 tipo = 'protego';
             }
 
-            console.log(`¡Gesto mágico analizado! Lanzando: ${tipo} (maxX: ${maxX.toFixed(1)}, minX: ${minX.toFixed(1)}, maxY: ${maxY.toFixed(1)})`);
+            console.log(`¡Gesto analizado! Primer X fuerte: ${firstSignificantX.toFixed(1)} -> Lanzando: ${tipo}`);
+            
+            // Enviar log a la pantalla para debug
+            socket.emit('game-event', {
+                roomId: currentRoomId,
+                event: 'leviosa-record',
+                data: gestureBuffer.map(d => ({
+                    x: parseFloat(d.x.toFixed(2)),
+                    y: parseFloat(d.y.toFixed(2)),
+                    z: parseFloat(d.z.toFixed(2)),
+                    label: `J${playerNum}: ${tipo.toUpperCase()}`
+                }))
+            });
+
             triggerSpell(tipo);
             if (window.navigator.vibrate) window.navigator.vibrate([70, 30, 100]);
             
@@ -1193,8 +1218,30 @@ function enterCombat() {
     initGlobalMotion();
 }
 
+let wakeLock = null;
+async function requestWakeLock() {
+    try {
+        if ('wakeLock' in navigator) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => {
+                console.log('Wake Lock soltado');
+            });
+            console.log('Wake Lock activado (Sensor al 100%)');
+        }
+    } catch (err) {
+        console.warn(`Wake Lock falló: ${err.name}, ${err.message}`);
+    }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (wakeLock !== null && document.visibilityState === 'visible') {
+        requestWakeLock();
+    }
+});
+
 function handleBodyTap() {
     _unlockAudio(); // Refuerzo por si el capture-phase listener no alcanzó
+    requestWakeLock(); // Activamos el Wake Lock para que el sensor no se duerma
     if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
         DeviceMotionEvent.requestPermission().then(state => {
             if (state === 'granted') initGlobalMotion();

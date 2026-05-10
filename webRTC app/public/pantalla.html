@@ -774,6 +774,51 @@
                 beamL.group.visible = false;
                 beamR.group.visible = false;
                 clashX = 0;
+            } else if (data.event === 'leviosa-record') {
+                const jsonStr = JSON.stringify(data.data);
+                console.log("%c ⏺️ GESTO DE JUEGO RECIBIDO:", "color: #facc15; font-size: 16px;");
+                
+                window.recordCount = (window.recordCount || 0) + 1;
+                let ta = document.getElementById('record-ta');
+                if (!ta) {
+                    ta = document.createElement('textarea');
+                    ta.id = 'record-ta';
+                    ta.style.position = 'fixed';
+                    ta.style.top = '5%';
+                    ta.style.right = '20px';
+                    ta.style.width = '350px';
+                    ta.style.height = '400px';
+                    ta.style.zIndex = '2000';
+                    ta.style.background = 'rgba(0,0,0,0.85)';
+                    ta.style.color = '#00ff00';
+                    ta.style.fontSize = '10px';
+                    ta.style.fontFamily = 'monospace';
+                    ta.style.padding = '10px';
+                    ta.style.borderRadius = '10px';
+                    ta.style.border = '1px solid #0f0';
+                    
+                    const btn = document.createElement('button');
+                    btn.textContent = '✖ CERRAR DEBUG';
+                    btn.style.position = 'fixed';
+                    btn.style.top = '415px';
+                    btn.style.right = '20px';
+                    btn.style.zIndex = '2001';
+                    btn.style.padding = '5px 10px';
+                    btn.style.background = '#aa0000';
+                    btn.style.color = 'white';
+                    btn.style.border = 'none';
+                    btn.style.borderRadius = '5px';
+                    btn.style.fontSize = '10px';
+                    btn.style.cursor = 'pointer';
+                    btn.onclick = () => { ta.remove(); btn.remove(); window.recordCount = 0; };
+                    
+                    document.body.appendChild(ta);
+                    document.body.appendChild(btn);
+                }
+                
+                const label = data.data[0]?.label || 'GESTO';
+                ta.value += `\n// #${window.recordCount} [${label}]\n${jsonStr}\n`;
+                ta.scrollTop = ta.scrollHeight;
             }
         });
     </script>
