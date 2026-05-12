@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobile Lightning VFX | God-Tier</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background: #000; 
+            overflow: hidden; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+        }
+        canvas { display: block; }
+        .ui {
+            position: fixed;
+            bottom: 40px;
+            text-align: center;
+            width: 100%;
+            z-index: 10;
+            pointer-events: none;
+            letter-spacing: 5px;
+            font-size: 10px;
+            color: rgba(255,255,255,0.3);
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="ui">Ascending Magic Energy &nbsp;•&nbsp; High Voltage</div>
+
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.149.0';
+        import { createStrobeLightning, MagicalBeam, CinematicShader } from './LightningSystem.js';
+        import { EffectComposer } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+        import { ShaderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/ShaderPass.js';
+
+        // ──────────────────────────────────────────────
+        // ESCENA Y RENDERER
+        // ──────────────────────────────────────────────
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0, 22);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        document.body.appendChild(renderer.domElement);
+
+        // POST-PROCESADO
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 3.0, 0.1, 0.85);
+        composer.addPass(bloomPass);
+
+        const cinematicPass = new ShaderPass(CinematicShader);
+        composer.addPass(cinematicPass);
+
+        // ──────────────────────────────────────────────
+        // SISTEMA DE RAYOS VERTICALES
+        // ──────────────────────────────────────────────
+        // Color eléctrico (Cian/Azul)
+        const col = '#00f2ff';
+        
+        // El sistema original asume eje X, así que rotamos el contenedor
+        const lightningContainer = new THREE.Group();
+        lightningContainer.rotation.z = Math.PI / 2; // Giramos 90 grados para que X sea Y
+        scene.add(lightningContainer);
+
+        // 1. Rayos Cinemáticos (El cuerpo del rayo)
+        // MagicalBeam(scene, color, direction, posX, rotZ)
+        // Usamos -Math.PI/2 para compensar la rotación del contenedor y que quede vertical
+        const beam = new MagicalBeam(lightningContainer, col, 1.0, 0, -Math.PI / 2);
+
+        // 2. Rayos Strobe (Las descargas caóticas)
+        const strobeMat = createStrobeLightning(lightningContainer, col, 1.0);
+
+        // ──────────────────────────────────────────────
+        // ANIMACIÓN
+        // ──────────────────────────────────────────────
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const t = clock.getElapsedTime();
+
+            // Intensidad pulsante para el efecto de "estallido"
+            const pulse = Math.pow(Math.sin(t * 15.0) * 0.5 + 0.5, 4.0);
+            const intensity = 1.0 + pulse * 4.0;
+
+            // Actualizamos los rayos
+            // uClashOffset es ahora la "punta" que sube hasta el final (25)
+            beam.update(t, intensity, 25, -25);
+            
+            strobeMat.uniforms.uTime.value = t;
+            strobeMat.uniforms.uClashOffset.value = 25;
+            strobeMat.uniforms.uBottomOffset.value = -25;
+            strobeMat.uniforms.uIntensity.value = 1.0;
+
+            // Efectos de cámara (temblor sutil)
+            camera.position.x = Math.sin(t * 50.0) * pulse * 0.2;
+            camera.position.y = Math.cos(t * 50.0) * pulse * 0.2;
+
+            composer.render();
+        }
+
+        animate();
+
+        // RESIZE
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

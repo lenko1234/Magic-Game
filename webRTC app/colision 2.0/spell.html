@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate Magic Duel | AAA Cinematic</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; }
+        .ui {
+            position: fixed;
+            top: 30px;
+            width: 100%;
+            text-align: center;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            pointer-events: none;
+            letter-spacing: 4px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+<div class="ui" id="status">PRESS [ARROWS] TO BATTLE</div>
+
+<script type="module">
+import * as THREE from 'https://esm.sh/three@0.149.0';
+import { createStrobeLightning, MagicalBeam, Singularity, createShockwave, CinematicShader } from './LightningSystem.js';
+import { EffectComposer } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/ShaderPass.js';
+
+// ──────────────────────────────────────────────
+// SETUP SCENE
+// ──────────────────────────────────────────────
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 10, 35);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+// POST-PROCESSING (LA PERFECCIÓN)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 2.5, 0.1, 0.85);
+composer.addPass(bloomPass);
+const cinematicPass = new ShaderPass(CinematicShader);
+composer.addPass(cinematicPass);
+
+// CONFIGURACIÓN
+const POS_L = -25;
+const POS_R = 25;
+const COL_L = '#00bbff';
+const COL_R = '#ff3300';
+
+// ──────────────────────────────────────────────
+// WIZARD SPELL CLASS
+// ──────────────────────────────────────────────
+class WizardSpell {
+    constructor(color, direction, startX) {
+        this.color = color;
+        this.startX = startX;
+        this.direction = direction;
+        this.progress = 0;
+        this.currentPos = startX;
+        this.isFiring = false;
+        this.isFading = false;
+        this.fadeLevel = 1.0;
+        this.speed = 0.035;
+
+        const rotZ = direction > 0 ? -Math.PI/2 : Math.PI/2;
+        this.beam = new MagicalBeam(scene, color, direction, 0, rotZ);
+        this.strobe = createStrobeLightning(scene, color, direction);
+        this.update(0, 0, startX);
+    }
+
+    cast() {
+        if (!this.isFiring && !this.isFading) {
+            this.isFiring = true;
+            this.progress = 0;
+            this.fadeLevel = 1.0;
+        }
+    }
+
+    update(t, intensity, pos) {
+        this.currentPos = pos;
+        this.beam.update(t, intensity, pos);
+        this.strobe.uniforms.uTime.value = t;
+        this.strobe.uniforms.uClashOffset.value = pos;
+        this.strobe.uniforms.uIntensity.value = (this.isFiring || this.isFading) ? this.fadeLevel : 0;
+    }
+}
+
+const spellL = new WizardSpell(COL_L, 1.0, POS_L);
+const spellR = new WizardSpell(COL_R, -1.0, POS_R);
+const core = new Singularity(scene, COL_L, COL_R);
+let shockwaves = [];
+
+// ESTADO GLOBAL
+let isClashing = false;
+let clashOffset = 0;
+let targetClashOffset = 0;
+
+// ──────────────────────────────────────────────
+// INPUT
+// ──────────────────────────────────────────────
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') {
+        if (isClashing) targetClashOffset += 2.0;
+        else spellL.cast();
+    }
+    if (e.key === 'ArrowLeft') {
+        if (isClashing) targetClashOffset -= 2.0;
+        else spellR.cast();
+    }
+});
+
+// ──────────────────────────────────────────────
+// LOOP
+// ──────────────────────────────────────────────
+const clock = new THREE.Clock();
+const statusEl = document.getElementById('status');
+
+function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    cinematicPass.uniforms.uTime.value = t;
+
+    // 1. Detección de Colisión
+    if (!isClashing && spellL.isFiring && spellR.isFiring) {
+        if (spellL.currentPos >= spellR.currentPos) {
+            isClashing = true;
+            clashOffset = (spellL.currentPos + spellR.currentPos) / 2;
+            targetClashOffset = clashOffset;
+            shockwaves.push(createShockwave(scene, clashOffset, '#ffffff'));
+            statusEl.innerText = "¡COLISIÓN ACTIVA!";
+            statusEl.style.textShadow = "0 0 20px #ffff00";
+        }
+    }
+
+    if (isClashing) {
+        clashOffset += (targetClashOffset - clashOffset) * 0.1;
+        spellL.update(t, 2.0 + Math.sin(t * 10.0), clashOffset);
+        spellR.update(t, 2.0 + Math.cos(t * 10.0), clashOffset);
+        core.update(t, clashOffset, 1.0 + Math.sin(t * 20.0) * 0.1);
+        
+        if (clashOffset > 22 || clashOffset < -22) {
+            isClashing = false;
+            core.update(t, clashOffset, 0);
+        }
+    } else {
+        core.update(t, 0, 0);
+        
+        // Mago Izquierdo
+        if (spellL.isFiring) {
+            spellL.progress += spellL.speed;
+            const p = THREE.MathUtils.lerp(POS_L, POS_R, Math.pow(spellL.progress, 0.8));
+            spellL.update(t, 2.0, p);
+            if (spellL.progress >= 1.0) { spellL.isFiring = false; spellL.isFading = true; }
+        } else if (spellL.isFading) {
+            spellL.fadeLevel -= 0.07;
+            spellL.update(t, 2.0 * spellL.fadeLevel, POS_R);
+            if (spellL.fadeLevel <= 0) { spellL.isFading = false; spellL.update(0, 0, POS_L); }
+        } else {
+            spellL.update(t, 0, POS_L);
+        }
+
+        // Mago Derecho
+        if (spellR.isFiring) {
+            spellR.progress += spellR.speed;
+            const p = THREE.MathUtils.lerp(POS_R, POS_L, Math.pow(spellR.progress, 0.8));
+            spellR.update(t, 2.0, p);
+            if (spellR.progress >= 1.0) { spellR.isFiring = false; spellR.isFading = true; }
+        } else if (spellR.isFading) {
+            spellR.fadeLevel -= 0.07;
+            spellR.update(t, 2.0 * spellR.fadeLevel, POS_L);
+            if (spellR.fadeLevel <= 0) { spellR.isFading = false; spellR.update(0, 0, POS_R); }
+        } else {
+            spellR.update(t, 0, POS_R);
+        }
+        
+        statusEl.innerText = "PRESS [ARROWS] TO BATTLE";
+        statusEl.style.textShadow = "none";
+    }
+
+    // Actualizar Shockwaves
+    shockwaves.forEach((sw, index) => {
+        sw.radius += 0.05;
+        sw.mat.uniforms.uRadius.value = sw.radius;
+        sw.mesh.scale.setScalar(1 + sw.radius * 2);
+        sw.mat.opacity = 1 - sw.radius;
+        if (sw.radius > 1.0) {
+            scene.remove(sw.mesh);
+            shockwaves.splice(index, 1);
+        }
+    });
+
+    composer.render();
+}
+animate();
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

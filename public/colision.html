@@ -1,0 +1,128 @@
+export default function CinematicBeamDemo() {
+return (
+<div className="w-full h-screen bg-black text-white flex items-center justify-center">
+    <div className="max-w-4xl p-8 space-y-6">
+        <h1 className="text-4xl font-bold">Cinematic Beam System Architecture</h1>
+
+        <div className="space-y-4 text-zinc-300 text-lg leading-relaxed">
+            <p>
+                Para lograr un efecto realmente cinematográfico necesitás combinar:
+            </p>
+
+            <ul className="list-disc pl-8 space-y-2">
+                <li>React Three Fiber</li>
+                <li>Custom GLSL shaders</li>
+                <li>Bloom HDR</li>
+                <li>GPU particles</li>
+                <li>Procedural noise</li>
+                <li>Additive blending</li>
+                <li>Distortion effects</li>
+            </ul>
+        </div>
+
+        <div className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800">
+            <pre className="text-sm overflow-auto text-zinc-200">
+{String.raw`npm install three @react-three/fiber @react-three/drei postprocessing @react-three/postprocessing simplex-noise`}
+          </pre>
+        </div>
+
+        <div className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 space-y-4">
+            <h2 className="text-2xl font-semibold">Starter Architecture</h2>
+
+            <pre className="text-sm overflow-auto text-zinc-200">
+{String.raw`src/
+ ├── App.jsx
+ ├── effects/
+ │    ├── Beam.jsx
+ │    ├── CollisionCore.jsx
+ │    ├── ElectricArcs.jsx
+ │    ├── Sparks.jsx
+ │    ├── Smoke.jsx
+ │    ├── DistortionPlane.jsx
+ │    └── shaders/
+ │         ├── beam.vert.glsl
+ │         └── beam.frag.glsl
+ └── postprocessing/
+      └── Effects.jsx`}
+          </pre>
+        </div>
+
+        <div className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 space-y-4">
+            <h2 className="text-2xl font-semibold">Main Beam Shader Idea</h2>
+
+            <pre className="text-sm overflow-auto text-zinc-200">
+{String.raw`uniform float time;
+varying vec2 vUv;
+
+void main() {
+  vUv = uv;
+
+  vec3 pos = position;
+
+  float wave1 = sin(pos.x * 20.0 + time * 6.0) * 0.03;
+  float wave2 = sin(pos.x * 55.0 + time * 12.0) * 0.01;
+
+  pos.y += wave1 + wave2;
+  pos.z += cos(pos.x * 25.0 + time * 5.0) * 0.02;
+
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}`}
+          </pre>
+        </div>
+
+        <div className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 space-y-4">
+            <h2 className="text-2xl font-semibold">Fragment Glow</h2>
+
+            <pre className="text-sm overflow-auto text-zinc-200">
+{String.raw`uniform vec3 color;
+uniform float time;
+
+varying vec2 vUv;
+
+void main() {
+  float glow = 1.0 - abs(vUv.y - 0.5) * 2.0;
+
+  glow = pow(glow, 3.0);
+
+  float pulse = 0.8 + sin(time * 8.0) * 0.2;
+
+  vec3 finalColor = color * glow * pulse;
+
+  gl_FragColor = vec4(finalColor, glow);
+}`}
+          </pre>
+        </div>
+
+        <div className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 space-y-4">
+            <h2 className="text-2xl font-semibold">Bloom</h2>
+
+            <pre className="text-sm overflow-auto text-zinc-200">
+{String.raw`<EffectComposer>
+  <Bloom
+    intensity={2.5}
+    luminanceThreshold={0}
+    mipmapBlur
+  />
+</EffectComposer>`}
+          </pre>
+        </div>
+
+        <div className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 space-y-4">
+            <h2 className="text-2xl font-semibold">Visual Tricks That Matter Most</h2>
+
+            <ul className="list-disc pl-8 text-zinc-300 space-y-2">
+                <li>Centro ultra blanco</li>
+                <li>Additive blending</li>
+                <li>Micro movimiento constante</li>
+                <li>Variación de grosor</li>
+                <li>Partículas de distinto tamaño</li>
+                <li>Glow suave + núcleo agresivo</li>
+                <li>Filamentos secundarios</li>
+                <li>Distorsión del aire</li>
+                <li>Ruido procedural</li>
+            </ul>
+        </div>
+    </div>
+</div>
+)
+}

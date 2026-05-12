@@ -73,13 +73,7 @@
 <body>
     <div id="waiting">
         <h1>MAGIC DUEL</h1>
-        <div style="display:flex; flex-direction:column; align-items:center; gap: 1rem;">
-            <div id="qr-container" style="background:white; padding:10px; border-radius:10px; box-shadow: 0 0 30px rgba(255,85,0,0.3);">
-                <div id="qr-canvas"></div>
-            </div>
-            <p id="setup-status" style="color: #ff5500; font-weight: bold; letter-spacing: 2px;">ESCANEA PARA UNIRTE</p>
-        </div>
-        <div style="display:flex; gap:0.5rem; align-items:center; margin-top: 2rem;">
+        <div style="display:flex; gap:0.5rem; align-items:center;">
             <input id="manual-room" placeholder="SALA" 
                 style="background:#0a0a0a; border:1px solid #ff5500; color:white; padding:0.6rem 1rem; border-radius:4px; font-family:monospace; width:120px; outline:none;">
             <button onclick="window.connectManual()" 
@@ -94,18 +88,10 @@
 <div class="overlay">Primordial Singularity &nbsp;•&nbsp; Unstable Magic Clash &nbsp;•&nbsp; Cinematic Post-Process</div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://esm.sh/three@0.149.0"
-            }
-        }
-    </script>
-    <script type="module">
+<script type="module">
 import * as THREE from 'https://esm.sh/three@0.149.0';
 import { OrbitControls } from 'https://esm.sh/three@0.149.0/examples/jsm/controls/OrbitControls.js';
-import { createStrobeLightning } from './core/LightningSystem.js';
+import { createStrobeLightning } from './LightningSystem.js';
 import { EffectComposer } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -515,8 +501,11 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 0, 25);
+camera.position.set(0, 2, 35); // Posición lateral elevada para mejor profundidad
 camera.lookAt(0, 0, 0);
+
+// Controles desactivados para vista cinemática fija
+// const controls = new OrbitControls(camera, renderer.domElement);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -547,10 +536,10 @@ const colorMap = { 'expelliarmus': 0xbf40ff, 'accio': 0xffffff, 'desmaius': 0xff
 let roomId = new URLSearchParams(window.location.search).get('room');
 
 window.connectManual = () => {
-    const input = document.getElementById('manual-room').value.trim().toUpperCase() || localStorage.getItem('lastRoomId');
-    if (input) {
-        roomId = input;
-        localStorage.setItem('lastRoomId', roomId);
+    const id = document.getElementById('manual-room').value.trim().toUpperCase() || localStorage.getItem('lastRoomId');
+    if (id) { 
+        roomId = id;
+        localStorage.setItem('lastRoomId', id);
         socket.emit('screen-join', roomId); 
         document.getElementById('waiting').style.display='none'; 
         initBars();
@@ -560,40 +549,7 @@ window.connectManual = () => {
 if (roomId) { 
     document.getElementById('manual-room').value = roomId; 
     window.connectManual(); 
-} else {
-    // Generar sala automática para setup
-    const autoRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    document.getElementById('manual-room').value = autoRoomId;
-    
-    // Mostramos el QR en pantalla
-    new QRCode(document.getElementById('qr-canvas'), {
-        text: `${window.location.origin}/?setup_room=${autoRoomId}`,
-        width: 256,
-        height: 256,
-        colorDark: '#000000',
-        colorLight: '#FFFFFF'
-    });
-    
-    // La pantalla se une silenciosamente a esta sala generada
-    socket.emit('screen-join', autoRoomId);
-    roomId = autoRoomId;
 }
-
-// Escuchar los ingresos a la sala de setup generada
-socket.on('player-joined', (data) => {
-    const statusEl = document.getElementById('setup-status');
-    if (data.player === 1) {
-        statusEl.textContent = 'MAGO 1 CONECTADO. ESPERANDO AL RIVAL...';
-        statusEl.style.color = '#a855f7';
-    } else if (data.player === 2) {
-        statusEl.textContent = '¡DUELO LISTO!';
-        statusEl.style.color = '#4ade80';
-        setTimeout(() => {
-            document.getElementById('waiting').style.display = 'none';
-            initBars();
-        }, 1500);
-    }
-});
 
 function initBars() {
     barP1 = new LiquidBar('liq-p1');
@@ -628,16 +584,9 @@ socket.on('game-event', (data) => {
         }
     } else if (data.event === 'clash-start') {
         isClashing = true;
-        // Punto de encuentro inicial donde se cruzan los rayos visualmente en este momento
-        let currentPosL = -25 + (progressL * 50);
-        let currentPosR = 25 - (progressR * 50);
-        clashOffset = (currentPosL + currentPosR) / 2;
-        targetOffset = clashOffset;
     } else if (data.event === 'clash-end') {
         isClashing = false;
-        lastClashOffset = clashOffset; // Capturamos el punto exacto del final
-        clashResolutionIntensity = 1.0; 
-        spellL_active = false; // Detenemos el progreso normal de disparo
+        spellL_active = false;
         spellR_active = false;
     } else if (data.event === 'rematch') {
         barP1?.setHealth(1.0);
@@ -806,8 +755,6 @@ let progressL = 0;
 let progressR = 0; 
 let progressBottomL = 0; 
 let progressBottomR = 0;
-let clashResolutionIntensity = 0; // Control para el blur out del choque
-let lastClashOffset = 0;         // Para recordar dónde terminó el choque
 const speed = 0.035;
 const fadeSpeed = 0.05;
 
@@ -832,11 +779,19 @@ function animate() {
     requestAnimationFrame(animate);
     const t = clock.getElapsedTime();
     
-    // 1. POSICIONES ACTUALES
+    // 1. DETECCIÓN DE COLISIÓN
     let currentPosL = -25 + (progressL * 50);
     let currentPosR = 25 - (progressR * 50);
     let bottomPosL = -25 + (progressBottomL * 50);
     let bottomPosR = 25 - (progressBottomR * 50);
+
+    if (!isClashing && spellL_active && spellR_active && progressBottomL < 0.1 && progressBottomR < 0.1) {
+        if (currentPosL >= currentPosR) {
+            isClashing = true;
+            clashOffset = (currentPosL + currentPosR) / 2;
+            targetOffset = clashOffset;
+        }
+    }
 
     // 2. LÓGICA DE MOVIMIENTO / COLISIÓN
     let intensity = 0;
@@ -867,36 +822,24 @@ function animate() {
             else if (progressBottomR < 1.0) progressBottomR += fadeSpeed;
             else { spellR_active = false; progressR = 0; progressBottomR = 0; }
         }
-        
-        // Reducir la intensidad del choque si estamos resolviendo (Más rápido)
-        if (clashResolutionIntensity > 0) {
-            clashResolutionIntensity -= 0.15;
-            if (clashResolutionIntensity <= 0) {
-                clashResolutionIntensity = 0;
-                spellL_active = false;
-                spellR_active = false;
-            }
-        }
     }
 
     // 3. ACTUALIZACIÓN DE MATERIALES
-    let cutL = isClashing ? clashOffset : (clashResolutionIntensity > 0 ? lastClashOffset : currentPosL);
+    let cutL = isClashing ? clashOffset : currentPosL;
     let btmL = isClashing ? -25 : bottomPosL;
-    let finalIntensityL = isClashing ? intensity : (clashResolutionIntensity > 0 ? clashResolutionIntensity * 3.0 : 2.0);
-    beamL.update(t, finalIntensityL, cutL, btmL);
+    beamL.update(t, isClashing ? intensity : 2.0, cutL, btmL);
     strobeMatL.uniforms.uTime.value = t;
     strobeMatL.uniforms.uClashOffset.value = cutL;
     strobeMatL.uniforms.uBottomOffset.value = btmL;
-    strobeMatL.uniforms.uIntensity.value = (spellL_active || clashResolutionIntensity > 0) ? (clashResolutionIntensity > 0 ? clashResolutionIntensity : 1.0) : 0.0;
+    strobeMatL.uniforms.uIntensity.value = spellL_active ? 1.0 : 0.0;
 
-    let cutR = isClashing ? clashOffset : (clashResolutionIntensity > 0 ? lastClashOffset : currentPosR);
+    let cutR = isClashing ? clashOffset : currentPosR;
     let btmR = isClashing ? 25 : bottomPosR;
-    let finalIntensityR = isClashing ? intensity : (clashResolutionIntensity > 0 ? clashResolutionIntensity * 3.0 : 2.0);
-    beamR.update(t, finalIntensityR, cutR, btmR);
+    beamR.update(t, isClashing ? intensity : 2.0, cutR, btmR);
     strobeMatR.uniforms.uTime.value = t;
     strobeMatR.uniforms.uClashOffset.value = cutR;
     strobeMatR.uniforms.uBottomOffset.value = btmR;
-    strobeMatR.uniforms.uIntensity.value = (spellR_active || clashResolutionIntensity > 0) ? (clashResolutionIntensity > 0 ? clashResolutionIntensity : 1.0) : 0.0;
+    strobeMatR.uniforms.uIntensity.value = spellR_active ? 1.0 : 0.0;
 
     coreMat.uniforms.uTime.value = t;
     
@@ -930,6 +873,7 @@ function animate() {
     sparks.material.uniforms.uTime.value = t;
     if (barP1) barP1.update();
     if (barP2) barP2.update();
+    // controls.update(); // Desactivado
     composer.render();
 }
 animate();

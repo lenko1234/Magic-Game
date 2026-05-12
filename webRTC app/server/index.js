@@ -35,6 +35,7 @@ const io = new Server(server, {
 });
 
 app.use(express.static(path.join(__dirname, '../public')));
+app.use('/v2', express.static(path.join(__dirname, '../colision 2.0')));
 
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
@@ -53,6 +54,39 @@ io.on('connection', (socket) => {
         socket.join(room);
         socket.data.isScreen = true;
         console.log(`Screen ${socket.id} joined room: ${room}`);
+    });
+
+    // Nuevo flujo: Unirse desde el QR de la Pantalla
+    socket.on('join-setup', (roomId) => {
+        const room = roomId.toUpperCase();
+        const clients = io.sockets.adapter.rooms.get(room);
+        let numPlayers = 0;
+        
+        if (clients) {
+            for (const clientId of clients) {
+                const clientSocket = io.sockets.sockets.get(clientId);
+                if (clientSocket && !clientSocket.data.isScreen) {
+                    numPlayers++;
+                }
+            }
+        }
+        
+        if (numPlayers === 0) {
+            socket.join(room);
+            socket.emit('setup-role', { role: 'host', room: room });
+            socket.to(room).emit('player-joined', { player: 1 });
+            console.log(`Player ${socket.id} joined setup as Host in room: ${room}`);
+        } else if (numPlayers === 1) {
+            socket.join(room);
+            socket.emit('setup-role', { role: 'client', room: room });
+            socket.to(room).emit('player-joined', { player: 2 });
+            // Fundamental: avisar al Host que llegó su rival
+            socket.to(room).emit('user-joined', socket.id);
+            console.log(`Player ${socket.id} joined setup as Client in room: ${room}`);
+        } else {
+            socket.emit('setup-role', { role: 'full' });
+            console.log(`Player ${socket.id} rejected, room ${room} is full`);
+        }
     });
 
     // Señalización WebRTC

@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Magic WebRTC</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
 
@@ -93,7 +102,14 @@
         }
         #clash-scene.visible { display: flex; flex-direction: column; align-items: center; justify-content: center; }
         
-        #bolt { width: 100%; height: 100%; display: block; mix-blend-mode: screen; position: absolute; top: 0; left: 0; pointer-events: none; }
+        #bolt { width: 100%; height: 100%; display: block; position: absolute; top: 0; left: 0; pointer-events: none; }
+        
+        #clash-canvas-container {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 40;
+        }
         
         .ui-container {
             position: absolute;
@@ -251,7 +267,9 @@
 
     <!-- CLASH UI -->
     <div id="clash-scene">
-        <canvas id="bolt"></canvas>
+        <div id="clash-canvas-container">
+            <canvas id="bolt"></canvas>
+        </div>
         <div class="ui-container">
             <div id="bar-container"><div id="bar-fill"></div></div>
             <div id="clash-msg">¡PREPÁRATE!</div>
@@ -446,10 +464,13 @@ class LiquidBar {
 
 class ClashLightning {
     constructor() {
-        this.canvas = document.getElementById('bolt');
-        if (!this.canvas) return;
-        this.ctx = this.canvas.getContext('2d');
         this.scene = document.getElementById('clash-scene');
+        this.canvas = document.getElementById('bolt');
+        if (!this.canvas) {
+            console.error("No se encontró el canvas #bolt para el choque");
+            return;
+        }
+        this.ctx = this.canvas.getContext('2d');
         this.W = 0; this.H = 0;
         this.stress = 0; this.targetStress = 0;
         this.sparks = [];
@@ -662,15 +683,16 @@ let lastFlickTime = 0;
 const FLICK_THRESHOLD = 25;
 const offensiveSpells = ['expelliarmus', 'desmaius'];
 let lastOffensiveSpell = null;
+let hasClashedThisDuel = false;
+
+const socket = io();
+let wakeLock = null; // Movido aquí para acceso global seguro
 
 // Clash detection: guardamos el hechizo propio para comparar con el del rival
 let pendingMySpell = null;  // { tipo, timestamp }
 const CLASH_WINDOW_MS = 2000; // si ambos tiran dentro de 2s → choque
+const CLASH_DURATION = 15000;  // 15 segundos de forcejeo
 
-// ----------------------------------------------------------------
-// SOCKET (solo para señalización - no pasa datos de juego)
-// ----------------------------------------------------------------
-const socket = io();
 
 // ----------------------------------------------------------------
 // AUDIO ENGINE (copiado del legacy)
@@ -697,7 +719,6 @@ async function _prefetchSound(name, url) {
 _prefetchSound('expelliarmus', 'sounds/expelliarmus.wav');
 _prefetchSound('desmaius',     'sounds/desmaius.wav');
 _prefetchSound('protego',      'sounds/protego.wav');
-_prefetchSound('accio',        'sounds/accio.wav');
 
 // ----------------------------------------------------------------
 // AUDIO UNLOCK + DECODE
@@ -897,7 +918,7 @@ function receiveAttack(data) {
     if (data.tipo === 'protego') return;
 
     // ¿Choque? Solo el Host decide (para evitar doble procesamiento)
-    if (isHost && pendingMySpell && !isInClash && offensiveSpells.includes(pendingMySpell.tipo)) {
+    if (isHost && pendingMySpell && !isInClash && !hasClashedThisDuel && offensiveSpells.includes(pendingMySpell.tipo)) {
         const elapsed = Date.now() - pendingMySpell.timestamp;
         if (elapsed < CLASH_WINDOW_MS) {
             console.log(`⚡ CHOQUE detectado! (${elapsed}ms) ${pendingMySpell.tipo} vs ${data.tipo}`);
@@ -977,7 +998,10 @@ let clashStartTime = 0;
 const CLASH_DURATION_MS = 8000;
 
 function startClash() {
+    if (isInClash || hasClashedThisDuel) return;
+    
     isInClash = true;
+    hasClashedThisDuel = true;
     spellCooldown = true;
     setSpellStatus(''); // Ocultar el texto base
     showClashGlow();
@@ -1253,13 +1277,20 @@ function sendP2P(obj) {
 
 // HOST: espera que se una alguien y lanza la oferta
 socket.on('user-joined', async () => {
+    if (!isHost && !document.getElementById('mago1-view').classList.contains('hidden')) {
+        // En caso manual, asumimos el rol acá
+        isHost = true;
+        playerNum = 1;
+        createPeerConnection();
+    }
+    if (!isHost) return; // Cliente ignorar
+    
     console.log('Rival detectado → iniciando WebRTC como HOST');
-    isHost = true;
-    playerNum = 1;
-    createPeerConnection();
-
-    dataChannel = peerConnection.createDataChannel('magic-duel');
-    setupDataChannel(dataChannel);
+    
+    if (!dataChannel || dataChannel.readyState === 'closed') {
+        dataChannel = peerConnection.createDataChannel('magic-duel');
+        setupDataChannel(dataChannel);
+    }
 
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
@@ -1305,7 +1336,6 @@ function enterCombat() {
     initGlobalMotion();
 }
 
-let wakeLock = null;
 async function requestWakeLock() {
     try {
         if ('wakeLock' in navigator) {
@@ -1420,7 +1450,44 @@ function joinRoom(roomId) {
 
 // Auto-unirse si viene de un QR
 const roomFromUrl = new URLSearchParams(window.location.search).get('room');
-if (roomFromUrl) joinRoom(roomFromUrl);
+const setupRoomFromUrl = new URLSearchParams(window.location.search).get('setup_room');
+
+if (roomFromUrl) {
+    joinRoom(roomFromUrl);
+} else if (setupRoomFromUrl) {
+    // Si viene del QR de la pantalla, preguntamos al servidor qué rol nos toca
+    socket.emit('join-setup', setupRoomFromUrl);
+}
+
+socket.on('setup-role', (data) => {
+    if (data.role === 'host') {
+        currentRoomId = data.room;
+        isHost = true;
+        playerNum = 1;
+        createPeerConnection();
+        dataChannel = peerConnection.createDataChannel('magic-duel');
+        setupDataChannel(dataChannel);
+        
+        mainView.classList.add('hidden');
+        mago1View.classList.remove('hidden');
+        document.getElementById('room-id-display').textContent = `SALA: ${currentRoomId}`;
+        setLobbyStatus('Mago 1 asignado. Esperando al Mago 2...');
+        document.getElementById('qr-canvas').innerHTML = ''; // Ocultar QR si estamos en setup por pantalla
+    } else if (data.role === 'client') {
+        currentRoomId = data.room;
+        isHost = false;
+        playerNum = 2;
+        mainView.classList.add('hidden');
+        mago2View.classList.remove('hidden');
+        mago2View.innerHTML = `
+            <h2 class="text-2xl font-bold text-green-400">¡SALA ENCONTRADA!</h2>
+            <p class="text-slate-400 mt-4 animate-pulse">Mago 2 asignado. Conectando P2P...</p>
+            <p class="font-mono text-purple-300 mt-2">SALA: ${data.room}</p>
+        `;
+    } else if (data.role === 'full') {
+        alert("La sala está llena.");
+    }
+});
 
 // ----------------------------------------------------------------
 // END SCREEN ENGINE (Three.js)
@@ -1455,6 +1522,7 @@ function resetGame() {
     spellCooldown = false;
     isInClash = false;
     pendingMySpell = null;
+    hasClashedThisDuel = false;
 
     // 2. Reiniciar UI
     if (myHealthBar) myHealthBar.setHealth(1.0);
