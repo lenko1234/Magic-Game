@@ -110,6 +110,7 @@ import { EffectComposer } from 'https://esm.sh/three@0.149.0/examples/jsm/postpr
 import { RenderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/ShaderPass.js';
+import { ImprovedNoise } from 'https://esm.sh/three@0.149.0/examples/jsm/math/ImprovedNoise.js';
 
 // ──────────────────────────────────────────────
 // CUSTOM POST-PROCESS SHADERS (REVERTED)
@@ -442,6 +443,298 @@ void main(){
 `;
 
 // ──────────────────────────────────────────────
+// PROTEGO SHIELD SYSTEM (Literal Copy from protego.html)
+// ──────────────────────────────────────────────
+const PROTEGO_NOISE_GLSL = `
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+float snoise(vec3 v) {
+    const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+    const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+    vec3 i  = floor(v + dot(v, C.yyy) );
+    vec3 x0 = v - i + dot(i, C.xxx) ;
+    vec3 g = step(x0.yzx, x0.xyz);
+    vec3 l = 1.0 - g;
+    vec3 i1 = min( g.xyz, l.zxy );
+    vec3 i2 = max( g.xyz, l.zxy );
+    vec3 x1 = x0 - i1 + C.xxx;
+    vec3 x2 = x0 - i2 + C.yyy;
+    vec3 x3 = x0 - D.yyy;
+    i = mod289(i);
+    vec4 p = permute( permute( permute( i.z + vec4(0.0, i1.z, i2.z, 1.0 )) + i.y + vec4(0.0, i1.y, i2.y, 1.0 )) + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+    float n_ = 0.142857142857;
+    vec3  ns = n_ * D.wyz - D.xzx;
+    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+    vec4 x_ = floor(j * ns.z);
+    vec4 y_ = floor(j - 7.0 * x_ );
+    vec4 x = x_ *ns.x + ns.yyyy;
+    vec4 y = y_ *ns.x + ns.yyyy;
+    vec4 h = 1.0 - abs(x) - abs(y);
+    vec4 b0 = vec4( x.xy, y.xy );
+    vec4 b1 = vec4( x.zw, y.zw );
+    vec4 s0 = floor(b0)*2.0 + 1.0;
+    vec4 s1 = floor(b1)*2.0 + 1.0;
+    vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+    vec3 p0 = vec3(a0.xy,h.x);
+    vec3 p1 = vec3(a0.zw,h.y);
+    vec3 p2 = vec3(a1.xy,h.z);
+    vec3 p3 = vec3(a1.zw,h.w);
+    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3) ) );
+}
+`;
+
+const DISTORTION_SHADER = {
+    uniforms: { "tDiffuse": { value: null }, "uTime": { value: 0 }, "uIntensity": { value: 0.012 } },
+    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `${PROTEGO_NOISE_GLSL}
+        uniform sampler2D tDiffuse; uniform float uTime; uniform float uIntensity; varying vec2 vUv;
+        void main() {
+            vec2 uv = vUv;
+            float n = snoise(vec3(uv * 1.5, uTime * 0.1));
+            // Máscara que libera el centro (0.0 en el medio, 1.0 en los bordes)
+            float mask = smoothstep(0.1, 0.4, abs(uv.x - 0.5));
+            uv += n * uIntensity * mask;
+            gl_FragColor = texture2D(tDiffuse, uv);
+        }
+    `
+};
+
+const PLASMA_VS = `
+    ${PROTEGO_NOISE_GLSL}
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vWorldPos;
+    uniform float uTime;
+    uniform float uVary;
+
+    void main() {
+        vUv = uv;
+        vNormal = normalize(normalMatrix * normal);
+        
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vWorldPos = worldPos.xyz;
+        
+        vec3 pos = position;
+        float d = snoise(vWorldPos * 0.4 + uTime * 0.3) * 1.5;
+        float d2 = snoise(vWorldPos * 1.5 - uTime * 0.6) * 0.4;
+        
+        pos += normal * (d + d2) * uVary;
+        
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    }
+`;
+
+const PLASMA_FS = `
+    ${PROTEGO_NOISE_GLSL}
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vWorldPos;
+    uniform float uTime;
+    uniform float uAlphaMult;
+    uniform float uGlobalAlpha;
+
+    void main() {
+        float v1 = snoise(vWorldPos * 0.5 + uTime * 0.2);
+        float v2 = snoise(vWorldPos * 1.2 - uTime * 0.4);
+        float vapor = smoothstep(-0.8, 1.0, v1 * v2);
+        
+        float tubeDist = abs(vUv.y - 0.5) * 2.0;
+        
+        float softEdge = pow(1.0 - tubeDist, 1.2);
+        
+        float core = smoothstep(0.04, 0.0, tubeDist);
+        float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0,0,1))), 3.0);
+        
+        vec3 c1 = vec3(0.0, 0.05, 0.2);
+        vec3 c2 = vec3(0.0, 0.6, 1.0);
+        vec3 c3 = vec3(1.8, 1.8, 1.8);
+        
+        vec3 color = mix(c1, c2, vapor);
+        color = mix(color, c3, core * (0.8 + vapor * 0.2));
+        color += c2 * fresnel * 0.4;
+        
+        float alpha = (core * 1.6 + vapor * 0.8 + fresnel * 0.4) * uAlphaMult * softEdge * uGlobalAlpha;
+        alpha = pow(alpha, 1.2) * vapor; 
+        
+        float edgeFade = smoothstep(0.0, 0.15, vUv.x) * smoothstep(1.0, 0.85, vUv.x);
+        
+        gl_FragColor = vec4(color, clamp(alpha * edgeFade, 0.0, 1.0));
+    }
+`;
+
+const LIGHTNING_VS = `
+    attribute float aRandom;
+    attribute vec3 aOffset;
+    varying vec2 vUv;
+    varying float vRandom;
+    varying float vLocalTime;
+    void main() {
+        vUv = uv;
+        vRandom = aRandom;
+        vLocalTime = aOffset.x;
+        gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+    }
+`;
+
+const LIGHTNING_FS = `
+    ${PROTEGO_NOISE_GLSL}
+    varying vec2 vUv;
+    varying float vRandom;
+    varying float vLocalTime;
+    uniform float uTime;
+    uniform vec3 uColor;
+    uniform float uSpeedMult;
+    uniform float uGlobalAlpha;
+
+    void main() {
+        vec2 uv = vUv;
+        uv.x -= 0.5;
+        float t = uTime * uSpeedMult * (1.0 + vRandom * 2.0) + vLocalTime;
+        float noise = snoise(vec3(uv.y * 3.0, vRandom * 10.0, t)) * 0.3;
+        noise += snoise(vec3(uv.y * 15.0, t * 1.5, 0.0)) * 0.08;
+        float bend = sin(uv.y * 3.14159265 + vRandom * 5.0) * 0.2 * vRandom;
+        float dist = abs(uv.x - noise - bend);
+        float core = 0.001 / (dist + 0.00001);
+        float glow = 0.005 / (dist + 0.001);
+        float pulse = pow(sin(t * 8.0 + vRandom * 20.0) * 0.5 + 0.5, 15.0);
+        float blackout = step(0.1, snoise(vec3(vRandom * 100.0, t * 0.2, 0.0)));
+        float intensity = (core + glow) * pulse * blackout * uGlobalAlpha;
+        intensity *= smoothstep(0.0, 0.1, uv.y) * smoothstep(1.0, 0.8, uv.y);
+        if (intensity < 0.005) discard;
+        vec3 finalColor = mix(uColor, vec3(1.5), core * 0.5);
+        gl_FragColor = vec4(finalColor * intensity * 2.5, intensity);
+    }
+`;
+
+function createClusteredLightning(mat, count, cfg) {
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1, 1, 16), mat, count);
+    const dummy = new THREE.Object3D();
+    const randoms = new Float32Array(count);
+    const offsets = new Float32Array(count * 3);
+    let i = 0, attempts = 0;
+    while (i < count && attempts < count * 20) {
+        const angle = Math.PI / 2 + (Math.random() * Math.PI);
+        const r = 3.5 + (Math.random() - 0.5) * 1.5;
+        const d = cfg.noise.noise(Math.cos(angle) * 2, Math.sin(angle) * 2, attempts * 0.1);
+        if (d < (cfg.density - 1.0)) { attempts++; continue; }
+        dummy.position.set(Math.cos(angle) * r, Math.sin(angle) * r, (Math.random() - 0.5) * 1.0);
+        const tx = -Math.sin(angle); const ty = Math.cos(angle);
+        const baseRot = Math.atan2(ty, tx);
+        const violentOffset = (Math.random() - 0.5) * 2.5;
+        dummy.rotation.set(0, 0, baseRot + violentOffset);
+        const s = cfg.scale[0] + Math.random() * (cfg.scale[1] - cfg.scale[0]);
+        dummy.scale.set(s * 0.3, s, 1);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+        randoms[i] = Math.random();
+        offsets[i*3] = Math.random() * 1000;
+        i++; attempts++;
+    }
+    mesh.geometry.setAttribute('aRandom', new THREE.InstancedBufferAttribute(randoms, 1));
+    mesh.geometry.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3));
+    return mesh;
+}
+
+function createViolentSparks() {
+    const count = 3000;
+    const g = new THREE.BufferGeometry();
+    const pos = new Float32Array(count*3), vel = new Float32Array(count*3), rnd = new Float32Array(count);
+    for(let i=0; i<count; i++){
+        const a = Math.PI/2 + Math.random()*Math.PI;
+        pos[i*3]=Math.cos(a)*3.5; pos[i*3+1]=Math.sin(a)*3.5; pos[i*3+2]=(Math.random()-0.5)*2;
+        vel[i*3]=5+Math.random()*15; vel[i*3+1]=(Math.random()-0.5)*5; vel[i*3+2]=(Math.random()-0.5)*5;
+        rnd[i]=Math.random();
+    }
+    g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+    g.setAttribute('aVel', new THREE.BufferAttribute(vel,3));
+    g.setAttribute('aRand', new THREE.BufferAttribute(rnd,1));
+    return new THREE.Points(g, new THREE.ShaderMaterial({
+        vertexShader:`attribute vec3 aVel; attribute float aRand; uniform float uT; uniform float uGlobalAlpha; varying float vA; void main(){
+            float l = fract(uT*0.5+aRand);
+            vec3 p = position + aVel*l; p.x += pow(l,2.0)*20.0;
+            vec4 mv = modelViewMatrix*vec4(p,1.0);
+            gl_PointSize = (10.0/-mv.z); gl_Position = projectionMatrix*mv;
+            vA = smoothstep(1.0, 0.7, l)*smoothstep(0.0, 0.1, l) * uGlobalAlpha;
+        }`,
+        fragmentShader:`varying float vA; void main(){ if(length(gl_PointCoord-0.5)>0.5) discard; gl_FragColor=vec4(0.5,0.8,1.0,vA); }`,
+        transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, uniforms:{ uT:{value:0}, uGlobalAlpha:{value:0}}
+    }));
+}
+
+function createProtegoForcefield(posX, rotationY) {
+    const forcefieldRoot = new THREE.Group();
+    forcefieldRoot.position.x = posX;
+    forcefieldRoot.rotation.y = rotationY;
+    forcefieldRoot.visible = false;
+    
+    const fogMat = new THREE.ShaderMaterial({
+        vertexShader: `varying vec3 vP; void main() { vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+        fragmentShader: `\${PROTEGO_NOISE_GLSL} varying vec3 vP; uniform float uT; void main() { 
+            float n = snoise(vP*0.1 + uT*0.03);
+            gl_FragColor = vec4(0.0, 0.02, 0.1, smoothstep(0.5, 0.9, n)*0.3);
+        }`,
+        transparent: true, depthWrite: false, side: THREE.BackSide, uniforms: { uT: { value: 0 } }
+    });
+    forcefieldRoot.add(new THREE.Mesh(new THREE.SphereGeometry(15, 32, 32), fogMat));
+
+    const layers = [];
+    const createLayer = (r, t, rotate, vary, alpha) => {
+        const mat = new THREE.ShaderMaterial({
+            vertexShader: PLASMA_VS, fragmentShader: PLASMA_FS,
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+            uniforms: { 
+                uTime: { value: 0 }, uVary: { value: vary }, 
+                uAlphaMult: { value: alpha }, uGlobalAlpha: { value: 0 } 
+            }
+        });
+        const mesh = new THREE.Mesh(new THREE.TorusGeometry(r, t, 64, 128, Math.PI), mat);
+        mesh.rotation.set(rotate[0], rotate[1], rotate[2]);
+        forcefieldRoot.add(mesh);
+        return mesh;
+    };
+    layers.push(createLayer(3.5, 0.4, [0, 0, Math.PI/2], 0.2, 1.0));
+    layers.push(createLayer(3.8, 1.2, [0.2, 0.1, Math.PI/2], 0.8, 0.3));
+    layers.push(createLayer(3.2, 0.8, [-0.3, -0.2, Math.PI/2 + 0.5], 0.5, 0.2));
+
+    const lightningGroups = [];
+    const noise = new ImprovedNoise();
+    const heroMat = new THREE.ShaderMaterial({
+        vertexShader: LIGHTNING_VS, fragmentShader: LIGHTNING_FS,
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+        uniforms: { 
+            uTime: { value: 0 }, uColor: { value: new THREE.Color(0xaaffff) }, 
+            uSpeedMult: { value: 0.5 }, uGlobalAlpha: { value: 0 } 
+        }
+    });
+    lightningGroups.push(createClusteredLightning(heroMat, 12, { scale: [2, 5], noise, density: 0.8 }));
+
+    const secondaryMat = heroMat.clone();
+    secondaryMat.uniforms.uColor.value.set(0x44ccff);
+    secondaryMat.uniforms.uSpeedMult.value = 1.2;
+    lightningGroups.push(createClusteredLightning(secondaryMat, 40, { scale: [1, 2.5], noise, density: 0.5 }));
+
+    const microMat = heroMat.clone();
+    microMat.uniforms.uColor.value.set(0x0044ff);
+    microMat.uniforms.uSpeedMult.value = 3.0;
+    lightningGroups.push(createClusteredLightning(microMat, 150, { scale: [0.2, 0.8], noise, density: 0.3 }));
+
+    lightningGroups.forEach(g => forcefieldRoot.add(g));
+
+    const sparks = createViolentSparks();
+    forcefieldRoot.add(sparks);
+
+    return { root: forcefieldRoot, layers, lightningGroups, sparks, defenseAlpha: 0, active: false };
+}
+
+// ──────────────────────────────────────────────
 // LIQUID BAR SYSTEM (Ported from pantalla.html)
 // ──────────────────────────────────────────────
 class LiquidBar {
@@ -526,8 +819,19 @@ bloomPass.threshold = 0.1;
 bloomPass.strength = 2.5;
 composer.addPass(bloomPass);
 
+const distortionPass = new ShaderPass(DISTORTION_SHADER);
+composer.addPass(distortionPass);
+
 const cinematicPass = new ShaderPass(CinematicShader);
 composer.addPass(cinematicPass);
+
+const protegoP1 = createProtegoForcefield(-17.5, Math.PI);
+protegoP1.root.scale.set(1.6, 1.6, 1.6);
+scene.add(protegoP1.root);
+
+const protegoP2 = createProtegoForcefield(17.5, 0);
+protegoP2.root.scale.set(1.6, 1.6, 1.6);
+scene.add(protegoP2.root);
 
 // Initial bars (will be started in connectManual)
 let barP1, barP2;
@@ -603,6 +907,17 @@ function initBars() {
 socket.on('game-event', (data) => {
     if (data.event === 'spell') {
         const color = colorMap[data.tipo] || 0xffffff;
+        
+        if (data.tipo === 'protego') {
+            const p = data.jugador === 1 ? protegoP1 : protegoP2;
+            p.active = true;
+            if (p.timer) clearTimeout(p.timer);
+            p.timer = setTimeout(() => {
+                p.active = false;
+            }, 1500);
+            return;
+        }
+
         if (data.jugador === 1) {
             spellL_active = true; 
             progressL = 0; 
@@ -824,6 +1139,18 @@ window.addEventListener('keydown', (e) => {
         if(e.key === 'ArrowRight' && !spellL_active) { spellL_active = true; progressL = 0; progressBottomL = 0; }
         if(e.key === 'ArrowLeft' && !spellR_active) { spellR_active = true; progressR = 0; progressBottomR = 0; }
     }
+
+    // TEST PROTEGO KEYS
+    if (e.key.toLowerCase() === 'a') {
+        protegoP1.active = true;
+        if (protegoP1.timer) clearTimeout(protegoP1.timer);
+        protegoP1.timer = setTimeout(() => { protegoP1.active = false; }, 1500);
+    }
+    if (e.key.toLowerCase() === 'd') {
+        protegoP2.active = true;
+        if (protegoP2.timer) clearTimeout(protegoP2.timer);
+        protegoP2.timer = setTimeout(() => { protegoP2.active = false; }, 1500);
+    }
 });
 
 // LOOP
@@ -879,19 +1206,57 @@ function animate() {
         }
     }
 
-    // 3. ACTUALIZACIÓN DE MATERIALES
+    // PROTEGO SHIELD VISUAL UPDATES
+    [protegoP1, protegoP2].forEach(p => {
+        const targetAlpha = p.active ? 1.0 : 0.0;
+        p.defenseAlpha += (targetAlpha - p.defenseAlpha) * 0.12;
+        p.root.visible = p.defenseAlpha > 0.01;
+        p.layers.forEach(l => {
+            l.material.uniforms.uTime.value = t;
+            l.material.uniforms.uGlobalAlpha.value = p.defenseAlpha;
+        });
+        p.lightningGroups.forEach(g => {
+            g.material.uniforms.uTime.value = t;
+            g.material.uniforms.uGlobalAlpha.value = p.defenseAlpha;
+        });
+        p.sparks.material.uniforms.uT.value = t;
+        p.sparks.material.uniforms.uGlobalAlpha.value = p.defenseAlpha;
+    });
+
+    const maxDefenseAlpha = Math.max(protegoP1.defenseAlpha, protegoP2.defenseAlpha);
+    if (distortionPass) {
+        // La distorsión es 0 si no hay escudo, y aumenta hasta 0.02 si el escudo está al máximo
+        distortionPass.uniforms.uIntensity.value = maxDefenseAlpha * 0.02;
+        distortionPass.uniforms.uTime.value = t;
+    }
+
+    // 3. ACTUALIZACIÓN DE MATERIALES Y REACCIÓN A PROTEGO
     let cutL = isClashing ? clashOffset : (clashResolutionIntensity > 0 ? lastClashOffset : currentPosL);
     let btmL = isClashing ? -25 : bottomPosL;
     let finalIntensityL = isClashing ? intensity : (clashResolutionIntensity > 0 ? clashResolutionIntensity * 3.0 : 2.0);
+    
+    let cutR = isClashing ? clashOffset : (clashResolutionIntensity > 0 ? lastClashOffset : currentPosR);
+    let btmR = isClashing ? 25 : bottomPosR;
+    let finalIntensityR = isClashing ? intensity : (clashResolutionIntensity > 0 ? clashResolutionIntensity * 3.0 : 2.0);
+
+    // Si P2 lanza hechizo y P1 tiene escudo (Escudo en -17.5, colisión en -17.5 + (3.2 * 1.6) = -12.38)
+    if (!isClashing && spellR_active && protegoP1.active && currentPosR <= -12.38) {
+        cutR = -12.38;
+        finalIntensityR = 8.0 + Math.sin(t * 50.0) * 2.0;
+    }
+    
+    // Si P1 lanza hechizo y P2 tiene escudo (Escudo en 17.5, colisión en 17.5 - (3.2 * 1.6) = 12.38)
+    if (!isClashing && spellL_active && protegoP2.active && currentPosL >= 12.38) {
+        cutL = 12.38;
+        finalIntensityL = 8.0 + Math.sin(t * 50.0) * 2.0;
+    }
+
     beamL.update(t, finalIntensityL, cutL, btmL);
     strobeMatL.uniforms.uTime.value = t;
     strobeMatL.uniforms.uClashOffset.value = cutL;
     strobeMatL.uniforms.uBottomOffset.value = btmL;
     strobeMatL.uniforms.uIntensity.value = (spellL_active || clashResolutionIntensity > 0) ? (clashResolutionIntensity > 0 ? clashResolutionIntensity : 1.0) : 0.0;
 
-    let cutR = isClashing ? clashOffset : (clashResolutionIntensity > 0 ? lastClashOffset : currentPosR);
-    let btmR = isClashing ? 25 : bottomPosR;
-    let finalIntensityR = isClashing ? intensity : (clashResolutionIntensity > 0 ? clashResolutionIntensity * 3.0 : 2.0);
     beamR.update(t, finalIntensityR, cutR, btmR);
     strobeMatR.uniforms.uTime.value = t;
     strobeMatR.uniforms.uClashOffset.value = cutR;
