@@ -805,7 +805,9 @@ class LiquidBar {
         this.ctx.beginPath();
         this.ctx.moveTo(0, this.H);
         this.ctx.lineTo(0, this.waveY(0, baseY + offsetY, extraAmp));
-        for (let x = 1; x <= this.W; x += 2) this.ctx.lineTo(x, this.waveY(x, baseY + offsetY, extraAmp));
+        // CPU Optimization: Step by 20 pixels instead of 2. 
+        // This cuts the canvas lineTo calls from 5000+ per frame down to ~500.
+        for (let x = 1; x <= this.W; x += 20) this.ctx.lineTo(x, this.waveY(x, baseY + offsetY, extraAmp));
         this.ctx.lineTo(this.W, this.H);
         this.ctx.fillStyle = color;
         this.ctx.fill();
@@ -1368,7 +1370,13 @@ function animate() {
         s.mat.uniforms.uRadius.value = s.radius;
         s.mat.uniforms.uTime.value = t;
         s.mesh.quaternion.copy(camera.quaternion);
-        if(s.radius > 1.2) { scene.remove(s.mesh); shockwaves.splice(i, 1); }
+        if(s.radius > 1.2) { 
+            // Memory Leak Fix: Must dispose materials and geometry or the GPU memory will crash over time
+            s.mat.dispose();
+            s.mesh.geometry.dispose();
+            scene.remove(s.mesh); 
+            shockwaves.splice(i, 1); 
+        }
     }
     
     cinematicPass.uniforms.uExposure.value = 0.9 + (isClashing ? pulse * 0.4 : 0);
