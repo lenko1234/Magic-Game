@@ -3,20 +3,12 @@ import * as THREE from 'three';
 const _nSize = 128;
 const _nData = new Uint8Array(_nSize * _nSize * 4);
 for (let i = 0; i < _nSize * _nSize * 4; i++) _nData[i] = Math.random() * 255;
-const globalNoiseTex = new THREE.DataTexture(_nData, _nSize, _nSize, THREE.RGBAFormat);
+export const globalNoiseTex = new THREE.DataTexture(_nData, _nSize, _nSize, THREE.RGBAFormat);
 globalNoiseTex.wrapS = THREE.RepeatWrapping;
 globalNoiseTex.wrapT = THREE.RepeatWrapping;
 globalNoiseTex.minFilter = THREE.LinearFilter;
 globalNoiseTex.magFilter = THREE.LinearFilter;
 globalNoiseTex.needsUpdate = true;
-
-const _oldShaderMat = THREE.ShaderMaterial;
-THREE.ShaderMaterial = function(params) {
-    if (!params) params = {};
-    if (!params.uniforms) params.uniforms = {};
-    params.uniforms.uNoiseTex = { value: globalNoiseTex };
-    return new _oldShaderMat(params);
-};
 
 // ──────────────────────────────────────────────
 // NOISE ALGORITHM (Self-contained)
@@ -124,7 +116,8 @@ export function createStrobeLightning(scene, color, direction) {
             uDirection: { value: direction },
             uClashOffset: { value: 0 },
             uBottomOffset: { value: -50 * direction }, // Fuera de pantalla al inicio
-            uIntensity: { value: 1.0 }
+            uIntensity: { value: 1.0 },
+            uNoiseTex: { value: globalNoiseTex }
         },
         transparent: true,
         blending: THREE.AdditiveBlending,
@@ -369,7 +362,8 @@ export class Singularity {
             uniforms: {
                 uTime: { value: 0 },
                 uColor1: { value: new THREE.Color(color1) },
-                uColor2: { value: new THREE.Color(color2) }
+                uColor2: { value: new THREE.Color(color2) },
+                uNoiseTex: { value: globalNoiseTex }
             },
             transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
         });

@@ -181,7 +181,7 @@
     <script type="module">
 import * as THREE from 'https://esm.sh/three@0.149.0';
 import { OrbitControls } from 'https://esm.sh/three@0.149.0/examples/jsm/controls/OrbitControls.js';
-import { createStrobeLightning } from './core/LightningSystem.js';
+import { createStrobeLightning, globalNoiseTex } from './core/LightningSystem.js';
 import { EffectComposer } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'https://esm.sh/three@0.149.0/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -511,7 +511,12 @@ float snoise(vec3 v) {
 `;
 
 const DISTORTION_SHADER = {
-    uniforms: { "tDiffuse": { value: null }, "uTime": { value: 0 }, "uIntensity": { value: 0.012 } },
+    uniforms: { 
+        "tDiffuse": { value: null }, 
+        "uTime": { value: 0 }, 
+        "uIntensity": { value: 0.012 },
+        "uNoiseTex": { value: globalNoiseTex }
+    },
     vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `${PROTEGO_NOISE_GLSL}
         uniform sampler2D tDiffuse; uniform float uTime; uniform float uIntensity; varying vec2 vUv;
@@ -696,11 +701,11 @@ function createProtegoForcefield(posX, rotationY) {
     
     const fogMat = new THREE.ShaderMaterial({
         vertexShader: `varying vec3 vP; void main() { vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-        fragmentShader: `\${PROTEGO_NOISE_GLSL} varying vec3 vP; uniform float uT; void main() { 
+        fragmentShader: `${PROTEGO_NOISE_GLSL} varying vec3 vP; uniform float uT; void main() { 
             float n = snoise(vP*0.1 + uT*0.03);
             gl_FragColor = vec4(0.0, 0.02, 0.1, smoothstep(0.5, 0.9, n)*0.3);
         }`,
-        transparent: true, depthWrite: false, side: THREE.BackSide, uniforms: { uT: { value: 0 } }
+        transparent: true, depthWrite: false, side: THREE.BackSide, uniforms: { uT: { value: 0 }, uNoiseTex: { value: globalNoiseTex } }
     });
     forcefieldRoot.add(new THREE.Mesh(new THREE.SphereGeometry(15, 32, 32), fogMat));
 
@@ -711,7 +716,8 @@ function createProtegoForcefield(posX, rotationY) {
             transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
             uniforms: { 
                 uTime: { value: 0 }, uVary: { value: vary }, 
-                uAlphaMult: { value: alpha }, uGlobalAlpha: { value: 0 } 
+                uAlphaMult: { value: alpha }, uGlobalAlpha: { value: 0 },
+                uNoiseTex: { value: globalNoiseTex }
             }
         });
         const mesh = new THREE.Mesh(new THREE.TorusGeometry(r, t, 64, 128, Math.PI), mat);
@@ -730,7 +736,8 @@ function createProtegoForcefield(posX, rotationY) {
         transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
         uniforms: { 
             uTime: { value: 0 }, uColor: { value: new THREE.Color(0xaaffff) }, 
-            uSpeedMult: { value: 0.5 }, uGlobalAlpha: { value: 0 } 
+            uSpeedMult: { value: 0.5 }, uGlobalAlpha: { value: 0 },
+            uNoiseTex: { value: globalNoiseTex }
         }
     });
     lightningGroups.push(createClusteredLightning(heroMat, 12, { scale: [2, 5], noise, density: 0.8 }));
@@ -1066,7 +1073,8 @@ class MagicalBeam {
                 uSeed: { value: Math.random() * 100 },
                 uIntensity: { value: 3.5 },
                 uClashOffset: { value: 0 },
-                uBottomOffset: { value: -25 }
+                uBottomOffset: { value: -25 },
+                uNoiseTex: { value: globalNoiseTex }
             },
             transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
         });
@@ -1093,7 +1101,10 @@ const beamR = new MagicalBeam(colR, -1, 0, Math.PI/2);
 const coreMat = new THREE.ShaderMaterial({
     vertexShader: coreVert,
     fragmentShader: coreFrag,
-    uniforms: { uTime: {value:0}, uColor1: {value:new THREE.Color(colL)}, uColor2: {value:new THREE.Color(colR)} },
+    uniforms: { 
+        uTime: {value:0}, uColor1: {value:new THREE.Color(colL)}, uColor2: {value:new THREE.Color(colR)},
+        uNoiseTex: { value: globalNoiseTex }
+    },
     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
 });
 const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.3, 4), coreMat);
@@ -1175,7 +1186,7 @@ function spawnShockwave() {
     const mat = new THREE.ShaderMaterial({
         vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
         fragmentShader: shockFrag,
-        uniforms: { uTime: {value:0}, uColor: {value:new THREE.Color(Math.random()>0.5?colL:colR)}, uRadius: {value:0} },
+        uniforms: { uTime: {value:0}, uColor: {value:new THREE.Color(Math.random()>0.5?colL:colR)}, uRadius: {value:0}, uNoiseTex: { value: globalNoiseTex } },
         transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
     });
     const mesh = new THREE.Mesh(geo, mat);
