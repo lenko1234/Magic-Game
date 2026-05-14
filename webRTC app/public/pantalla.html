@@ -68,6 +68,71 @@
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
         }
         .bar-shell canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+        /* ---- DEBUG LOG PANEL ---- */
+        #debug-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            background: rgba(10, 15, 20, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 85, 0, 0.3);
+            border-radius: 12px;
+            padding: 15px;
+            z-index: 5000;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            transition: transform 0.3s ease;
+        }
+        #debug-panel h3 {
+            color: #ff5500;
+            font-size: 12px;
+            letter-spacing: 2px;
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+        #debug-log-ta {
+            width: 100%;
+            height: 250px;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: #4ade80;
+            font-size: 10px;
+            padding: 8px;
+            border-radius: 6px;
+            resize: none;
+            outline: none;
+        }
+        .btn-debug {
+            background: #ff5500;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 11px;
+            letter-spacing: 1px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+        .btn-debug:hover {
+            background: #ff7733;
+            transform: scale(1.02);
+        }
+        .btn-debug:active {
+            transform: scale(0.98);
+        }
+        .btn-clear {
+            background: #334155;
+            margin-top: 5px;
+        }
+
     </style>
 </head>
 <body>
@@ -91,7 +156,16 @@
         <div id="shell-p1" class="bar-shell"><canvas id="liq-p1"></canvas></div>
         <div id="shell-p2" class="bar-shell"><canvas id="liq-p2"></canvas></div>
     </div>
-<div class="overlay">Primordial Singularity &nbsp;•&nbsp; Unstable Magic Clash &nbsp;•&nbsp; Cinematic Post-Process</div>
+
+    <!-- DEBUG SYSTEM -->
+    <div id="debug-panel">
+        <h3><span>LOG DE CALIBRACIÓN</span> <span id="debug-count" style="color:white">0</span></h3>
+        <textarea id="debug-log-ta" readonly placeholder="Esperando hechizos..."></textarea>
+        <button class="btn-debug btn-clear" onclick="clearDebugLog()">LIMPIAR LOG</button>
+    </div>
+
+
+
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -962,8 +1036,59 @@ socket.on('game-event', (data) => {
         spellR_active = false;
         clashOffset = 0;
         targetOffset = 0;
+    } else if (data.event === 'leviosa-record') {
+        // --- SISTEMA DE LOGS DE COORDINADAS ---
+        const gesture = {
+            id: Date.now(),
+            mago: data.data[0]?.label?.split(':')[0] || '?',
+            tipo: data.data[0]?.label?.split(': ')[1] || '?',
+            timestamp: new Date().toLocaleTimeString(),
+            valido: true,
+            data: data.data
+        };
+        
+        window.allGestures = window.allGestures || [];
+        window.allGestures.push(gesture);
+        updateDebugUI();
+    } else if (data.event === 'leviosa-incorrect') {
+        // Marcar el último hechizo de este jugador como incorrecto
+        if (!window.allGestures) return;
+        const playerLabel = `J${data.jugador}`;
+        // Buscar de atrás para adelante el último gesto de este mago
+        for (let i = window.allGestures.length - 1; i >= 0; i--) {
+            if (window.allGestures[i].mago === playerLabel) {
+                window.allGestures[i].valido = false;
+                if (!window.allGestures[i].tipo.includes("[INCORRECTO]")) {
+                    window.allGestures[i].tipo += " [INCORRECTO]";
+                }
+                break;
+            }
+        }
+        updateDebugUI();
     }
 });
+
+
+window.clearDebugLog = () => {
+    window.allGestures = [];
+    updateDebugUI();
+};
+
+
+function updateDebugUI() {
+    const ta = document.getElementById('debug-log-ta');
+    const count = document.getElementById('debug-count');
+    if (!ta) return;
+    
+    ta.value = JSON.stringify(window.allGestures, (key, value) => {
+        if (key === 'label') return undefined; // Limpiar label redundante de cada frame para que el JSON sea más ligero
+        return value;
+    }, 2);
+    
+    count.textContent = window.allGestures.length;
+    ta.scrollTop = ta.scrollHeight; // Auto-scroll al final
+}
+
 
 // ──────────────────────────────────────────────
 // CLASSES & OBJECTS

@@ -39,9 +39,32 @@
         /* ---- COMBAT ---- */
         #combat {
             display: none;
+            height: 100vh;
             position: relative;
-            min-height: 100vh;
             overflow: hidden;
+            background: #010405;
+        }
+
+        .btn-incorrect {
+            position: fixed;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid rgba(239, 68, 68, 0.5);
+            color: #f87171;
+            padding: 12px 20px;
+            border-radius: 999px;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 2000;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            backdrop-filter: blur(4px);
+        }
+        .btn-incorrect:active {
+            background: rgba(239, 68, 68, 0.5);
+            transform: translateX(-50%) scale(0.95);
         }
 
         .glow-overlay {
@@ -258,6 +281,7 @@
 <!--  COMBAT                                                            -->
 <!-- ================================================================ -->
 <div id="combat">
+    <button class="btn-incorrect" onclick="reportIncorrectSpell()">⚠️ Marcar error</button>
     <div id="connection-status">P2P</div>
     <div id="glow" class="glow-overlay"></div>
 
@@ -464,49 +488,141 @@ class LiquidBar {
 
 class ClashLightning {
     constructor() {
-        this.scene = document.getElementById('clash-scene');
-        this.canvas = document.getElementById('bolt');
-        if (!this.canvas) {
-            console.error("No se encontró el canvas #bolt para el choque");
-            return;
-        }
-        this.ctx = this.canvas.getContext('2d');
-        this.W = 0; this.H = 0;
-        this.stress = 0; this.targetStress = 0;
-        this.sparks = [];
-        this.t = 0;
-        this.lastUpdate = 0;
-        this.boltPath = [];
-        this.branches = [];
-        this.animFrame = null;
+        this.sceneContainer = document.getElementById('clash-scene');
+        this.canvasContainer = document.getElementById('clash-canvas-container');
         this.active = false;
+        this.stress = 0;
+        this.targetStress = 0;
         
-        this.resize = this.resize.bind(this);
-        window.addEventListener('resize', this.resize);
-        this.resize();
+        // Evitamos duplicar el renderer si ya existe
+        if (this.canvasContainer.querySelector('canvas')) {
+            this.canvasContainer.innerHTML = '';
+        }
+
+        // Dynamically load the exact code
+        this.initThreeJS();
     }
     
-    resize() {
-        if (!this.scene) return;
-        this.W = window.innerWidth;
-        this.H = window.innerHeight;
-        this.canvas.width = this.W;
-        this.canvas.height = this.H;
-    }
-    
-    addSparks(n, cx, cy) {
-        for (let i=0; i<n; i++) {
-            const a = Math.random() * Math.PI * 2;
-            const sp = (1 + Math.random() * 6) * (0.5 + this.stress * 2);
-            this.sparks.push({
-                x: cx, y: cy, 
-                vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, 
-                life: 1, r: 0.5 + Math.random() * 2, 
-                color: Math.random() > 0.5 ? '#fff' : (this.stress > 0.5 ? '#fca5a5' : '#e9d5ff')
-            });
+    async initThreeJS() {
+        // Load dependencies dynamically from esm.sh to match lightningmobile.html exactly
+        const THREE = await import('https://esm.sh/three@0.149.0');
+        const { createStrobeLightning, MagicalBeam, CinematicShader } = await import('./core/LightningSystem.js');
+        const { EffectComposer } = await import('https://esm.sh/three@0.149.0/examples/jsm/postprocessing/EffectComposer.js');
+        const { RenderPass } = await import('https://esm.sh/three@0.149.0/examples/jsm/postprocessing/RenderPass.js');
+        const { UnrealBloomPass } = await import('https://esm.sh/three@0.149.0/examples/jsm/postprocessing/UnrealBloomPass.js');
+        const { ShaderPass } = await import('https://esm.sh/three@0.149.0/examples/jsm/postprocessing/ShaderPass.js');
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0, 22);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        
+        renderer.domElement.style.position = 'absolute';
+        renderer.domElement.style.top = '0';
+        renderer.domElement.style.left = '0';
+        this.canvasContainer.appendChild(renderer.domElement);
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 3.0, 0.1, 0.85);
+        composer.addPass(bloomPass);
+
+        const cinematicPass = new ShaderPass(CinematicShader);
+        composer.addPass(cinematicPass);
+
+        const col = '#00f2ff';
+        const lightningContainer = new THREE.Group();
+        lightningContainer.rotation.z = Math.PI / 2;
+        scene.add(lightningContainer);
+
+        const beam = new MagicalBeam(lightningContainer, col, 1.0, 0, -Math.PI / 2);
+        const strobeMat = createStrobeLightning(lightningContainer, col, 1.0);
+
+        const clock = new THREE.Clock();
+
+        this.animateFn = () => {
+            if (!this.active) return;
+            this.animFrame = requestAnimationFrame(this.animateFn);
+            
+            // TIEMPO ACELERADO: El rayo se mueve más rápido con el estrés
+            const timeScale = 1.0 + this.stress * 2.5; 
+            const delta = clock.getDelta() * timeScale;
+            this.internalTime = (this.internalTime || 0) + delta;
+            const t = this.internalTime;
+
+            this.stress += (this.targetStress - this.stress) * 0.15;
+            if (Math.abs(this.targetStress - this.stress) < 0.001) this.stress = this.targetStress;
+            this.targetStress *= 0.96;
+
+            // Flicker de alta frecuencia cuando hay mucho estrés
+            const highFreqFlicker = Math.random() > (0.95 - this.stress * 0.5) ? 2.0 : 1.0;
+            const pulse = Math.pow(Math.sin(t * 15.0) * 0.5 + 0.5, 4.0);
+            
+            const crazyFactor = 1.0 + this.stress * 3.0;
+            const gameplayIntensity = (1.0 + pulse * 4.0) * crazyFactor * highFreqFlicker;
+
+            beam.update(t, gameplayIntensity, 25, -25);
+
+            strobeMat.uniforms.uTime.value = t;
+            strobeMat.uniforms.uClashOffset.value = 25;
+            strobeMat.uniforms.uBottomOffset.value = -25;
+            strobeMat.uniforms.uIntensity.value = (1.0 + this.stress * 4.0) * highFreqFlicker;
+            
+            cinematicPass.uniforms.uTime.value = t;
+            
+            bloomPass.strength = 3.0 + this.stress * 8.0;
+            bloomPass.radius = 0.1 + this.stress * 1.0;
+
+            // SHAKE CONTROLADO: Bajamos la amplitud para evitar el efecto de "duplicado" visual
+            // pero mantenemos la violencia con alta frecuencia
+            const shakeAmt = (pulse * 0.05 + this.stress * 0.4); 
+            camera.position.x = Math.sin(t * 100.0) * shakeAmt; 
+            camera.position.y = Math.cos(t * 100.0) * shakeAmt;
+            camera.position.z = 22 + (Math.random() - 0.5) * this.stress * 0.5;
+
+            composer.render();
+
+            const fill = document.getElementById('bar-fill');
+            if (fill) fill.style.background = this.stress > 0.6 ? 'linear-gradient(90deg,#7f1d1d,#ef4444)' : this.stress > 0.3 ? 'linear-gradient(90deg,#7c3aed,#f97316)' : 'linear-gradient(90deg,#7c3aed,#a855f7)';
+            const msg = document.getElementById('clash-msg');
+            if (msg) msg.textContent = this.stress < 0.1 ? '¡MOVETE!' : this.stress < 0.4 ? '¡MÁS FUERTE!' : this.stress < 0.7 ? '¡ESO!' : '¡PODER MÁXIMO!';
+        };
+
+        this.resizeFn = () => {
+            if (!this.active) return;
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        };
+        window.addEventListener('resize', this.resizeFn);
+        
+        if (this.active) {
+            this.animateFn();
         }
     }
-    
+
+    start() {
+        if (this.active) return;
+        this.active = true;
+        this.sceneContainer.classList.add('visible');
+        this.stress = 0;
+        this.targetStress = 0;
+        if (this.resizeFn) this.resizeFn();
+        if (this.animateFn) this.animateFn();
+    }
+
+    stop() {
+        this.active = false;
+        this.sceneContainer.classList.remove('visible');
+        if (this.animFrame) cancelAnimationFrame(this.animFrame);
+    }
+
     setStress(val) {
         this.targetStress = Math.min(1, val / 6);
     }
@@ -514,152 +630,6 @@ class ClashLightning {
     updateTimeBar(progress) {
         const fill = document.getElementById('bar-fill');
         if (fill) fill.style.width = Math.max(0, (100 - progress * 100)) + '%';
-    }
-
-    // Generador del camino (zigzag centrado, con amplitud acotada)
-    generateMainPath(startX, startY, endY, segments, maxJitter) {
-        let path = [{x: startX, y: startY}];
-        let stepY = (endY - startY) / segments;
-
-        for (let i = 1; i < segments; i++) {
-            let dx = (Math.random() - 0.5) * maxJitter;
-            path.push({x: startX + dx, y: startY + i * stepY});
-        }
-        path.push({x: startX, y: endY});
-        return path;
-    }
-
-    draw() {
-        if (!this.active) return;
-        this.t += 0.016; 
-        
-        this.stress += (this.targetStress - this.stress) * 0.15;
-        if (Math.abs(this.targetStress - this.stress) < 0.001) this.stress = this.targetStress;
-        this.targetStress *= 0.96;
-
-        this.ctx.globalCompositeOperation = 'source-over';
-        this.ctx.clearRect(0, 0, this.W, this.H);
-        
-        this.ctx.globalCompositeOperation = 'screen';
-        this.ctx.lineCap = 'round';
-        this.ctx.lineJoin = 'miter'; 
-
-        const colorR = this.stress > 0.6 ? 255 : this.stress > 0.3 ? 220 : 180;
-        const colorG = this.stress > 0.6 ? Math.floor(50 - this.stress * 40) : this.stress > 0.3 ? Math.floor(120 - this.stress * 80) : 100;
-        const colorB = this.stress > 0.6 ? Math.floor(50 - this.stress * 40) : 255;
-        const neonColor = `rgb(${colorR},${colorG},${colorB})`;
-        const coreColor = '#ffffff';
-
-        const cx = this.W / 2;
-        
-        // Acelera la frecuencia de redibujado con el estrés (hace que vibre rapidísimo)
-        const updateInterval = 0.08 - (this.stress * 0.06); 
-        
-        if (this.t - this.lastUpdate > updateInterval) {
-            this.lastUpdate = this.t;
-            
-            // RAYO PRINCIPAL: Se vuelve un poco más quebrado, pero no más ancho
-            const mainSegments = Math.floor(10 + Math.random() * 4 + (this.stress * 2));
-            const mainJitter = 12 + this.stress * 10; // Amplitud muy contenida
-            this.boltPath = this.generateMainPath(cx, 0, this.H, mainSegments, mainJitter);
-
-            // RAYITOS SECUNDARIOS
-            this.branches = [];
-            const numBranches = 1 + Math.floor(this.stress * 3);
-            
-            for (let i = 0; i < numBranches; i++) {
-                // ALBOROTO: Quiebres mínimos, apenas suben con el estrés para mantenerlo realista
-                const secSegments = Math.floor(10 + Math.random() * 4 + (this.stress * 2)); 
-                // Pero su amplitud (Jitter) se mantiene muy cercana al rayo principal
-                const secJitter = 15 + this.stress * 15; 
-                this.branches.push(this.generateMainPath(cx, 0, this.H, secSegments, secJitter));
-            }
-        }
-
-        const drawBolt = (path, width, color, microJitter = 0) => {
-            if (!path || path.length < 2) return;
-            this.ctx.beginPath();
-            this.ctx.moveTo(path[0].x, path[0].y);
-            for (let i = 1; i < path.length; i++) {
-                let mx = path[i].x + (Math.random() - 0.5) * microJitter;
-                let my = path[i].y + (Math.random() - 0.5) * microJitter;
-                this.ctx.lineTo(mx, my);
-            }
-            this.ctx.lineWidth = width;
-            this.ctx.strokeStyle = color;
-            this.ctx.stroke();
-        };
-
-        const isBlankFrame = Math.random() > 0.85 && this.stress < 0.7;
-
-        if (this.boltPath.length > 0 && !isBlankFrame) {
-            // Tronco Principal
-            drawBolt(this.boltPath, 8 + this.stress * 6, neonColor, 1);
-            drawBolt(this.boltPath, 2 + this.stress * 3, coreColor, 0);
-
-            // Rayitos secundarios (Orbitan muy de cerca y vibran más intensamente)
-            for (let branch of this.branches) {
-                if (Math.random() > 0.2) {
-                    drawBolt(branch, 3 + this.stress * 3, neonColor, 2 + this.stress * 3); // Más microJitter
-                    drawBolt(branch, 1, coreColor, 0);
-                }
-            }
-            
-            if (this.stress > 0.2 && Math.random() > 0.5) {
-                const rIdx = Math.floor(Math.random() * this.boltPath.length);
-                this.addSparks(Math.floor(1 + this.stress * 2), this.boltPath[rIdx].x, this.boltPath[rIdx].y);
-            }
-        }
-
-        // --- ACTUALIZAR CHISPAS ---
-        this.ctx.globalCompositeOperation = 'screen';
-        for (const s of this.sparks) {
-            s.x += s.vx; 
-            s.y += s.vy; 
-            s.vy += 0.3; 
-            s.life -= 0.04 + Math.random() * 0.03; 
-            
-            if (s.life > 0) {
-                this.ctx.beginPath(); 
-                this.ctx.moveTo(s.x, s.y);
-                this.ctx.lineTo(s.x - s.vx * 1.5, s.y - s.vy * 1.5);
-                this.ctx.lineWidth = Math.max(0.5, s.r * s.life);
-                this.ctx.strokeStyle = s.color;
-                this.ctx.globalAlpha = s.life; 
-                this.ctx.stroke();
-            }
-        }
-        this.ctx.globalAlpha = 1;
-        this.sparks = this.sparks.filter(s => s.life > 0);
-
-        const fill = document.getElementById('bar-fill');
-        if (fill) fill.style.background = this.stress > 0.6 ? 'linear-gradient(90deg,#7f1d1d,#ef4444)' : this.stress > 0.3 ? 'linear-gradient(90deg,#7c3aed,#f97316)' : 'linear-gradient(90deg,#7c3aed,#a855f7)';
-
-        const msg = document.getElementById('clash-msg');
-        if (msg) msg.textContent = this.stress < 0.1 ? '¡MOVETE!' : this.stress < 0.4 ? '¡MÁS FUERTE!' : this.stress < 0.7 ? '¡ESO!' : '¡PODER MÁXIMO!';
-        
-        // this.updateTimeBar(1 - this.stress); // Eliminado: el usuario quiere que sea de tiempo, no de estrés
-
-        this.animFrame = requestAnimationFrame(() => this.draw());
-    }
-
-    start() {
-        if (this.active) return;
-        this.active = true;
-        this.scene.classList.add('visible');
-        this.resize();
-        this.lastUpdate = 0;
-        this.draw();
-    }
-
-    stop() {
-        this.active = false;
-        this.scene.classList.remove('visible');
-        if (this.animFrame) cancelAnimationFrame(this.animFrame);
-        this.sparks = [];
-        this.boltPath = [];
-        this.branches = [];
-        this.ctx.clearRect(0,0,this.W,this.H);
     }
 }
 
@@ -1159,7 +1129,21 @@ function checkGesture(e) {
     }
 }
 
+function reportIncorrectSpell() {
+    if (window.navigator.vibrate) window.navigator.vibrate(200);
+    socket.emit('game-event', {
+        roomId: currentRoomId,
+        event: 'leviosa-incorrect',
+        jugador: playerNum
+    });
+    
+    const btn = document.querySelector('.btn-incorrect');
+    btn.textContent = "✅ ENVIADO";
+    setTimeout(() => { btn.textContent = "⚠️ Marcar error"; }, 1000);
+}
+
 function initGlobalMotion() {
+
     if (motionHandler) return;
     motionHandler = (e) => {
         if (isInClash) {
