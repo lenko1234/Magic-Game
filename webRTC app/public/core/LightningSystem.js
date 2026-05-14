@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const _nSize = 128;
+const _nSize = 32;
 const _nData = new Uint8Array(_nSize * _nSize * 4);
 for (let i = 0; i < _nSize * _nSize * 4; i++) _nData[i] = Math.random() * 255;
 export const globalNoiseTex = new THREE.DataTexture(_nData, _nSize, _nSize, THREE.RGBAFormat);
@@ -49,13 +49,10 @@ void main() {
     float distFromCenter = abs(instanceMatrix[3][1]);
     vVerticalFade = 1.0 - clamp(distFromCenter / 3.5, 0.0, 1.0);
     
-    float fbm1 = snoise(vec3(normX * 4.0, aRandom * 50.0, strobeTime * 2.0));
-    float fbm2 = snoise(vec3(normX * 12.0, aRandom * 150.0, strobeTime * 4.0));
-    float fbm3 = snoise(vec3(normX * 24.0, aRandom * 300.0, strobeTime * 8.0));
-    float jagged = (abs(fbm1) * 1.0 + abs(fbm2) * 0.3 + abs(fbm3) * 0.1) * uDirection;
+    float snakeWave = snoise(vec3(normX * 3.0, aRandom * 50.0, strobeTime * 1.5));
     float envelope = 1.0 - pow(abs(normX * 2.0), 2.0);
-    pos.y += jagged * 1.8 * envelope * aParams.x;
-    pos.z += snoise(vec3(normX * 5.0, aRandom * 200.0, strobeTime * 2.0)) * 1.2 * envelope;
+    pos.y += snakeWave * 2.5 * envelope * aParams.x;
+    pos.z += snoise(vec3(normX * 4.0, aRandom * 200.0, strobeTime * 1.5)) * 1.5 * envelope;
     
     vec4 worldPos = instanceMatrix * vec4(pos, 1.0);
     vWorldPos = worldPos.xyz;
@@ -225,11 +222,11 @@ void main(){
     float t = uTime * 25.0;
     float spine = smoothstep(0.02, 0.0, d); 
     float bite = step(0.98, snoise(vec3(vUv.y * 10.0, t * 0.5, 0.0)));
-    float n = 1.0 - abs(snoise(vec3(vUv.y * 10.0 + t * uDirection, vUv.x * 2.0, t * 0.1)));
-    float sharp = pow(n, 6.0); 
-    float thickness = 0.01 + vNode * 0.04 + bite * 0.05;
-    float collapse = step(0.05, snoise(vec3(vUv.y * 1.5, t * 0.3, 0.0)));
-    float fragmentation = step(0.3, snoise(vec3(vUv.y * (60.0 + uDirection * 20.0), t * 3.0, 0.0))) * pow(vDistToCore, 2.0);
+    float n = 1.0 - abs(snoise(vec3(vUv.y * 5.0 + t * uDirection, vUv.x * 2.0, t * 0.05)));
+    float sharp = pow(n, 4.0); 
+    float thickness = 0.015 + vNode * 0.04 + bite * 0.05;
+    float collapse = step(-0.5, snoise(vec3(vUv.y * 1.0, t * 0.2, 0.0)));
+    float fragmentation = step(0.5, snoise(vec3(vUv.y * 20.0, t * 2.0, 0.0))) * pow(vDistToCore, 2.0);
     float energyTheft = smoothstep(0.7, 1.0, vDistToCore);
     float tip = (uDirection > 0.0) ? (uClashOffset + 25.0)/50.0 : (25.0 - uClashOffset)/50.0;
     float bottom = (uDirection > 0.0) ? (uBottomOffset + 25.0)/50.0 : (25.0 - uBottomOffset)/50.0;
