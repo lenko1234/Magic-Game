@@ -157,12 +157,7 @@
         <div id="shell-p2" class="bar-shell"><canvas id="liq-p2"></canvas></div>
     </div>
 
-    <!-- DEBUG SYSTEM -->
-    <div id="debug-panel">
-        <h3><span>LOG DE CALIBRACIÓN</span> <span id="debug-count" style="color:white">0</span></h3>
-        <textarea id="debug-log-ta" readonly placeholder="Esperando hechizos..."></textarea>
-        <button class="btn-debug btn-clear" onclick="clearDebugLog()">LIMPIAR LOG</button>
-    </div>
+
 
 
 
@@ -1053,7 +1048,6 @@ socket.on('game-event', (data) => {
         
         window.allGestures = window.allGestures || [];
         window.allGestures.push(gesture);
-        updateDebugUI();
     } else if (data.event === 'leviosa-incorrect') {
         // Marcar el último hechizo de este jugador como incorrecto
         if (!window.allGestures) return;
@@ -1068,30 +1062,16 @@ socket.on('game-event', (data) => {
                 break;
             }
         }
-        updateDebugUI();
     }
 });
 
 
 window.clearDebugLog = () => {
     window.allGestures = [];
-    updateDebugUI();
 };
 
 
-function updateDebugUI() {
-    const ta = document.getElementById('debug-log-ta');
-    const count = document.getElementById('debug-count');
-    if (!ta) return;
-    
-    ta.value = JSON.stringify(window.allGestures, (key, value) => {
-        if (key === 'label') return undefined; // Limpiar label redundante de cada frame para que el JSON sea más ligero
-        return value;
-    }, 2);
-    
-    count.textContent = window.allGestures.length;
-    ta.scrollTop = ta.scrollHeight; // Auto-scroll al final
-}
+
 
 
 // ──────────────────────────────────────────────
