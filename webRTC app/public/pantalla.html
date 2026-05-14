@@ -191,44 +191,68 @@ import { ImprovedNoise } from 'https://esm.sh/three@0.149.0/examples/jsm/math/Im
 // ──────────────────────────────────────────────
 // CUSTOM POST-PROCESS SHADERS (REVERTED)
 // ──────────────────────────────────────────────
-const CinematicShader = {
+const MegaPostProcessShader = {
     uniforms: {
         "tDiffuse": { value: null },
         "uVignette": { value: 0.5 },
         "uChromatic": { value: 0.002 },
         "uContrast": { value: 1.1 },
         "uExposure": { value: 1.0 },
-        "uTime": { value: 0.0 }
+        "uTime": { value: 0.0 },
+        "uIntensity": { value: 0.012 },
+        "uNoiseTex": { value: globalNoiseTex }
     },
     vertexShader: `
         varying vec2 vUv;
         void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
     `,
     fragmentShader: `
+        uniform sampler2D uNoiseTex;
+        float snoise(vec3 v) {
+            vec2 uv1 = v.xy * 0.05 + vec2(v.z * 0.01);
+            vec2 uv2 = v.xy * 0.03 - vec2(v.z * 0.015);
+            vec4 t1 = texture2D(uNoiseTex, uv1);
+            vec4 t2 = texture2D(uNoiseTex, uv2);
+            return ((t1.r + t2.g) - 1.0) * 1.5;
+        }
+
         uniform sampler2D tDiffuse;
         uniform float uVignette;
         uniform float uChromatic;
         uniform float uContrast;
         uniform float uExposure;
         uniform float uTime;
+        uniform float uIntensity;
         varying vec2 vUv;
         
         float random(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
         void main() {
-            vec4 r = texture2D(tDiffuse, vUv + vec2(uChromatic, 0.0));
-            vec4 g = texture2D(tDiffuse, vUv);
-            vec4 b = texture2D(tDiffuse, vUv - vec2(uChromatic, 0.0));
+            vec2 uv = vUv;
+            
+            // 1. Distortion Pass (using noise texture)
+            float n = snoise(vec3(uv * 1.5, uTime * 0.1));
+            float mask = smoothstep(0.1, 0.4, abs(uv.x - 0.5));
+            uv += n * uIntensity * mask;
+
+            // 2. Cinematic Pass (Chromatic Aberration via distorted UVs)
+            vec4 r = texture2D(tDiffuse, uv + vec2(uChromatic, 0.0));
+            vec4 g = texture2D(tDiffuse, uv);
+            vec4 b = texture2D(tDiffuse, uv - vec2(uChromatic, 0.0));
             vec4 color = vec4(r.r, g.g, b.b, g.a);
             
             // Grain
             float grain = (random(vUv + uTime) - 0.5) * 0.05;
             color.rgb += grain;
 
+            // Contrast & Exposure
             color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
             color.rgb *= uExposure;
+            
+            // Vignette (perfect circle using un-distorted vUv)
             float dist = distance(vUv, vec2(0.5));
             color.rgb *= smoothstep(0.9, uVignette, dist);
+
             gl_FragColor = color;
         }
     `
@@ -510,26 +534,7 @@ float snoise(vec3 v) {
 }
 `;
 
-const DISTORTION_SHADER = {
-    uniforms: { 
-        "tDiffuse": { value: null }, 
-        "uTime": { value: 0 }, 
-        "uIntensity": { value: 0.012 },
-        "uNoiseTex": { value: globalNoiseTex }
-    },
-    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: `${PROTEGO_NOISE_GLSL}
-        uniform sampler2D tDiffuse; uniform float uTime; uniform float uIntensity; varying vec2 vUv;
-        void main() {
-            vec2 uv = vUv;
-            float n = snoise(vec3(uv * 1.5, uTime * 0.1));
-            // Máscara que libera el centro (0.0 en el medio, 1.0 en los bordes)
-            float mask = smoothstep(0.1, 0.4, abs(uv.x - 0.5));
-            uv += n * uIntensity * mask;
-            gl_FragColor = texture2D(tDiffuse, uv);
-        }
-    `
-};
+// DISTORTION_SHADER removed (now merged into MegaPostProcessShader)
 
 const PLASMA_VS = `
     ${PROTEGO_NOISE_GLSL}
@@ -827,8 +832,15 @@ class LiquidBar {
 // ENGINE INITIALIZATION
 // ──────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-renderer.setSize(window.innerWidth, window.innerHeight);
+// Lock internal resolution to 720p maximum for high performance on projectors
+const MAX_HEIGHT = 720;
+const aspect = window.innerWidth / window.innerHeight;
+const renderWidth = Math.round(MAX_HEIGHT * aspect);
+
+renderer.setPixelRatio(1); 
+renderer.setSize(renderWidth, MAX_HEIGHT, false);
+renderer.domElement.style.width = '100vw';
+renderer.domElement.style.height = '100vh';
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
 
@@ -840,15 +852,13 @@ camera.lookAt(0, 0, 0);
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), 3.5, 0.4, 0.85);
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(renderWidth / 2, MAX_HEIGHT / 2), 3.5, 0.4, 0.85);
 bloomPass.threshold = 0.1;
 bloomPass.strength = 2.5;
 composer.addPass(bloomPass);
 
-const distortionPass = new ShaderPass(DISTORTION_SHADER);
-composer.addPass(distortionPass);
-
-const cinematicPass = new ShaderPass(CinematicShader);
+// Distortion and Cinematic passes merged into MegaShader
+const cinematicPass = new ShaderPass(MegaPostProcessShader);
 composer.addPass(cinematicPass);
 
 const protegoP1 = createProtegoForcefield(-17.5, Math.PI);
@@ -863,10 +873,12 @@ scene.add(protegoP2.root);
 let barP1, barP2;
 
 window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    const aspect = window.innerWidth / window.innerHeight;
+    camera.aspect = aspect;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    composer.setSize(window.innerWidth, window.innerHeight);
+    const renderWidth = Math.round(MAX_HEIGHT * aspect);
+    renderer.setSize(renderWidth, MAX_HEIGHT, false);
+    composer.setSize(renderWidth, MAX_HEIGHT);
 });
 
 // ----------------------------------------------------------------
@@ -1309,10 +1321,8 @@ function animate() {
     });
 
     const maxDefenseAlpha = Math.max(protegoP1.defenseAlpha, protegoP2.defenseAlpha);
-    if (distortionPass) {
-        // La distorsión es 0 si no hay escudo, y aumenta hasta 0.02 si el escudo está al máximo
-        distortionPass.uniforms.uIntensity.value = maxDefenseAlpha * 0.02;
-        distortionPass.uniforms.uTime.value = t;
+    if (cinematicPass) {
+        cinematicPass.uniforms.uIntensity.value = maxDefenseAlpha * 0.02;
     }
 
     // 3. ACTUALIZACIÓN DE MATERIALES Y REACCIÓN A PROTEGO
