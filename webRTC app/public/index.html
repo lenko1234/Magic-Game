@@ -1331,17 +1331,13 @@ function enterCombat() {
 }
 
 async function requestWakeLock() {
+    if (wakeLock) return; // Ya está activo
     try {
         if ('wakeLock' in navigator) {
             wakeLock = await navigator.wakeLock.request('screen');
-            wakeLock.addEventListener('release', () => {
-                console.log('Wake Lock soltado');
-            });
-            console.log('Wake Lock activado (Sensor al 100%)');
+            console.log('🛡️ Wake Lock: ACTIVADO');
         }
-    } catch (err) {
-        console.warn(`Wake Lock falló: ${err.name}, ${err.message}`);
-    }
+    } catch (err) {}
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -1426,7 +1422,9 @@ document.getElementById('btnJoin').onclick = () => {
 };
 
 function stopScanner() {
-    if (html5QrCode) html5QrCode.stop().catch(() => {});
+    if (html5QrCode && html5QrCode.getState() === 2) { // 2 = SCANNING
+        html5QrCode.stop().catch(() => {});
+    }
 }
 
 function joinRoom(roomId) {
