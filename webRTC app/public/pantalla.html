@@ -209,11 +209,11 @@ const MegaPostProcessShader = {
     fragmentShader: `
         uniform sampler2D uNoiseTex;
         float snoise(vec3 v) {
-            vec2 uv1 = v.xy * 0.05 + vec2(v.z * 0.01);
-            vec2 uv2 = v.xy * 0.03 - vec2(v.z * 0.015);
+            vec2 uv1 = v.xy * 0.015 + vec2(v.z * 0.005);
+            vec2 uv2 = v.xy * 0.01 - vec2(v.z * 0.007);
             vec4 t1 = texture2D(uNoiseTex, uv1);
             vec4 t2 = texture2D(uNoiseTex, uv2);
-            return ((t1.r + t2.g) - 1.0) * 1.5;
+            return (t1.r * 0.7 + t2.g * 0.3) * 2.0 - 1.0;
         }
 
         uniform sampler2D tDiffuse;
@@ -299,8 +299,8 @@ void main(){
     float macroFreq = (uLayer == 0.0) ? 0.1 : 0.3;
     float macroAmp = (uLayer == 0.0) ? 4.0 : 1.5;
     
-    float noise = snoise(vec3(p.y * macroFreq, t * 0.4, uSeed));
-    float snappedN = pow(abs(noise), 1.1) * sign(noise); 
+    float noise = snoise(vec3(p.y * macroFreq, t * 0.3, uSeed));
+    float snappedN = noise; 
     
     // DISTORSIÓN ORBITAL ERRÁTICA: Usamos UV.y para independencia de rotación
     // El núcleo está en vUv.y = 1.0 (mapeado dinámicamente)
@@ -309,8 +309,7 @@ void main(){
     float gravityPull = pow(distToCore, 2.5);
     
     // Dirección errática de torsión
-    float erraticTime = t * 0.1 + snoise(vec3(0.0, t * 0.05, 0.0)) * 2.0;
-    float twist = snoise(vec3(0.0, erraticTime, 0.0)) * gravityPull * 6.0;
+    float twist = snoise(vec3(0.0, t * 0.1, 0.0)) * gravityPull * 5.0;
     
     // Rotación tangencial (Whirlpool en el plano de la sección)
     float cosT = cos(twist);
@@ -320,8 +319,8 @@ void main(){
     p.x = mix(p.x, nx, gravityPull);
     p.z = mix(p.z, nz, gravityPull);
     
-    p.x += (snappedN * macroAmp) * compression + snoise(vec3(t * 10.0, erraticTime, 0.0)) * gravityPull * 4.0;
-    p.z += (snoise(vec3(p.y * 0.5, t, uSeed + 1.0)) * macroAmp * 0.3 * compression);
+    p.x += (snappedN * macroAmp) * compression + snoise(vec3(t * 1.5, t * 0.5, 0.0)) * gravityPull * 2.5;
+    p.z += (snoise(vec3(p.y * 0.3, t * 0.4, uSeed + 1.0)) * macroAmp * 0.3 * compression);
     
     vDisplace = snappedN;
     vTension = abs(noise);

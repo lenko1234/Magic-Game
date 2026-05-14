@@ -16,13 +16,11 @@ globalNoiseTex.needsUpdate = true;
 const noiseGLSL = `
 uniform sampler2D uNoiseTex;
 float snoise(vec3 v) {
-    // Escalar la frecuencia para que sea similar a simplex
-    vec2 uv1 = v.xy * 0.05 + vec2(v.z * 0.01);
-    vec2 uv2 = v.xy * 0.03 - vec2(v.z * 0.015);
+    vec2 uv1 = v.xy * 0.015 + vec2(v.z * 0.005);
+    vec2 uv2 = v.xy * 0.01 - vec2(v.z * 0.007);
     vec4 t1 = texture2D(uNoiseTex, uv1);
     vec4 t2 = texture2D(uNoiseTex, uv2);
-    // Combinar canales para simular profundidad
-    return ((t1.r + t2.g) - 1.0) * 1.5; 
+    return (t1.r * 0.7 + t2.g * 0.3) * 2.0 - 1.0;
 }
 `;
 
@@ -51,13 +49,13 @@ void main() {
     float distFromCenter = abs(instanceMatrix[3][1]);
     vVerticalFade = 1.0 - clamp(distFromCenter / 3.5, 0.0, 1.0);
     
-    float fbm1 = snoise(vec3(normX * 8.0, aRandom * 50.0, strobeTime * 5.0));
-    float fbm2 = snoise(vec3(normX * 24.0, aRandom * 150.0, strobeTime * 10.0));
-    float fbm3 = snoise(vec3(normX * 64.0, aRandom * 300.0, strobeTime * 20.0));
-    float jagged = (abs(fbm1) * 1.5 + abs(fbm2) * 0.5 + abs(fbm3) * 0.25) * uDirection;
+    float fbm1 = snoise(vec3(normX * 4.0, aRandom * 50.0, strobeTime * 2.0));
+    float fbm2 = snoise(vec3(normX * 12.0, aRandom * 150.0, strobeTime * 4.0));
+    float fbm3 = snoise(vec3(normX * 24.0, aRandom * 300.0, strobeTime * 8.0));
+    float jagged = (abs(fbm1) * 1.0 + abs(fbm2) * 0.3 + abs(fbm3) * 0.1) * uDirection;
     float envelope = 1.0 - pow(abs(normX * 2.0), 2.0);
-    pos.y += jagged * 2.0 * envelope * aParams.x;
-    pos.z += snoise(vec3(normX * 10.0, aRandom * 200.0, strobeTime * 5.0)) * 1.5 * envelope;
+    pos.y += jagged * 1.8 * envelope * aParams.x;
+    pos.z += snoise(vec3(normX * 5.0, aRandom * 200.0, strobeTime * 2.0)) * 1.2 * envelope;
     
     vec4 worldPos = instanceMatrix * vec4(pos, 1.0);
     vWorldPos = worldPos.xyz;
@@ -184,21 +182,20 @@ void main(){
     float compression = 1.0 - (node * 0.4);
     float macroFreq = (uLayer == 0.0) ? 0.1 : 0.3;
     float macroAmp = (uLayer == 0.0) ? 4.0 : 1.5;
-    float noise = snoise(vec3(p.y * macroFreq, t * 0.4, uSeed));
-    float snappedN = pow(abs(noise), 1.1) * sign(noise); 
+    float noise = snoise(vec3(p.y * macroFreq, t * 0.3, uSeed));
+    float snappedN = noise; 
     float distToCore = smoothstep(0.4, 1.0, vUv.y);
     vDistToCore = distToCore;
     float gravityPull = pow(distToCore, 2.5);
-    float erraticTime = t * 0.1 + snoise(vec3(0.0, t * 0.05, 0.0)) * 2.0;
-    float twist = snoise(vec3(0.0, erraticTime, 0.0)) * gravityPull * 6.0;
+    float twist = snoise(vec3(0.0, t * 0.1, 0.0)) * gravityPull * 5.0;
     float cosT = cos(twist);
     float sinT = sin(twist);
     float nx = p.x * cosT - p.z * sinT;
     float nz = p.x * sinT + p.z * cosT;
     p.x = mix(p.x, nx, gravityPull);
     p.z = mix(p.z, nz, gravityPull);
-    p.x += (snappedN * macroAmp) * compression + snoise(vec3(t * 10.0, erraticTime, 0.0)) * gravityPull * 4.0;
-    p.z += (snoise(vec3(p.y * 0.5, t, uSeed + 1.0)) * macroAmp * 0.3 * compression);
+    p.x += (snappedN * macroAmp) * compression + snoise(vec3(t * 1.5, t * 0.5, 0.0)) * gravityPull * 2.5;
+    p.z += (snoise(vec3(p.y * 0.3, t * 0.4, uSeed + 1.0)) * macroAmp * 0.3 * compression);
     vDisplace = snappedN;
     vTension = abs(noise);
     float tip = (uDirection > 0.0) ? (uClashOffset + 25.0)/50.0 : (25.0 - uClashOffset)/50.0;
@@ -228,9 +225,9 @@ void main(){
     float t = uTime * 25.0;
     float spine = smoothstep(0.02, 0.0, d); 
     float bite = step(0.98, snoise(vec3(vUv.y * 10.0, t * 0.5, 0.0)));
-    float n = 1.0 - abs(snoise(vec3(vUv.y * 25.0 + t * uDirection, vUv.x * 4.0, t * 0.2)));
-    float sharp = pow(n, 12.0); 
-    float thickness = 0.005 + vNode * 0.03 + bite * 0.1;
+    float n = 1.0 - abs(snoise(vec3(vUv.y * 10.0 + t * uDirection, vUv.x * 2.0, t * 0.1)));
+    float sharp = pow(n, 6.0); 
+    float thickness = 0.01 + vNode * 0.04 + bite * 0.05;
     float collapse = step(0.05, snoise(vec3(vUv.y * 1.5, t * 0.3, 0.0)));
     float fragmentation = step(0.3, snoise(vec3(vUv.y * (60.0 + uDirection * 20.0), t * 3.0, 0.0))) * pow(vDistToCore, 2.0);
     float energyTheft = smoothstep(0.7, 1.0, vDistToCore);
