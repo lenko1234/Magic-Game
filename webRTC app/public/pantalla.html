@@ -69,6 +69,15 @@
         }
         .bar-shell canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
+        /* Hide health bars on mobile for a cleaner cinematic view */
+        @media (max-width: 768px) {
+            #health-container {
+                display: none !important;
+            }
+        }
+
+
+
         /* ---- DEBUG LOG PANEL ---- */
         #debug-panel {
             position: fixed;
@@ -156,6 +165,8 @@
         <div id="shell-p1" class="bar-shell"><canvas id="liq-p1"></canvas></div>
         <div id="shell-p2" class="bar-shell"><canvas id="liq-p2"></canvas></div>
     </div>
+
+
 
 
     <!-- 
@@ -299,8 +310,10 @@ void main(){
     float macroFreq = (uLayer == 0.0) ? 0.1 : 0.3;
     float macroAmp = (uLayer == 0.0) ? 4.0 : 1.5;
     
-    float noise = snoise(vec3(p.y * macroFreq, t * 0.3, uSeed));
-    float snappedN = noise; 
+    float n1 = snoise(vec3(p.y * macroFreq, t * 0.4, uSeed));
+    float n2 = snoise(vec3(p.y * macroFreq * 3.0, t * 0.8, uSeed + 10.0));
+    float combined = n1 + n2 * 0.3;
+    float snappedN = pow(abs(combined), 1.1) * sign(combined); 
     
     // DISTORSIÓN ORBITAL ERRÁTICA: Usamos UV.y para independencia de rotación
     // El núcleo está en vUv.y = 1.0 (mapeado dinámicamente)
@@ -319,11 +332,12 @@ void main(){
     p.x = mix(p.x, nx, gravityPull);
     p.z = mix(p.z, nz, gravityPull);
     
-    p.x += (snappedN * macroAmp) * compression + snoise(vec3(t * 0.8, t * 0.3, 0.0)) * gravityPull * 1.5;
-    p.z += (snoise(vec3(p.y * 0.2, t * 0.2, uSeed + 1.0)) * macroAmp * 0.3 * compression);
+    // Eliminamos la vibración (jitter) de alta frecuencia para que el rayo sea estable
+    p.x += (snappedN * macroAmp) * compression;
+    p.z += (snoise(vec3(p.y * 0.5, t * 0.4, uSeed + 1.0)) * macroAmp * 0.2 * compression);
     
     vDisplace = snappedN;
-    vTension = abs(noise);
+    vTension = abs(combined); 
     
     // CONVERGENCIA CRÍTICA DINÁMICA: Colapso relativo al punto de choque real
     float tip = (uDirection > 0.0) ? (uClashOffset + 25.0)/50.0 : (25.0 - uClashOffset)/50.0;
@@ -767,6 +781,12 @@ function createProtegoForcefield(posX, rotationY) {
 // ──────────────────────────────────────────────
 // LIQUID BAR SYSTEM (Ported from pantalla.html)
 // ──────────────────────────────────────────────
+
+
+// ──────────────────────────────────────────────
+// ──────────────────────────────────────────────
+// LIQUID BAR SYSTEM (Ported from pantalla.html)
+// ──────────────────────────────────────────────
 class LiquidBar {
     constructor(canvasId) {
         this.canvas = document.getElementById(canvasId);
@@ -829,7 +849,6 @@ class LiquidBar {
     }
 }
 
-// ──────────────────────────────────────────────
 // ENGINE INITIALIZATION
 // ──────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -873,6 +892,7 @@ scene.add(protegoP2.root);
 // Initial bars (will be started in connectManual)
 let barP1, barP2;
 
+
 window.addEventListener('resize', () => {
     const aspect = window.innerWidth / window.innerHeight;
     camera.aspect = aspect;
@@ -896,7 +916,8 @@ window.connectManual = () => {
         localStorage.setItem('lastRoomId', roomId);
         socket.emit('screen-join', roomId); 
         document.getElementById('waiting').style.display='none'; 
-        initBars();
+        initBars(); 
+
     }
 };
 
@@ -937,6 +958,8 @@ socket.on('player-joined', (data) => {
         }, 1500);
     }
 });
+
+
 
 function initBars() {
     barP1 = new LiquidBar('liq-p1');
@@ -1228,26 +1251,41 @@ const fadeSpeed = 0.05;
 let clashOffset = 0;
 let targetOffset = 0;
 
-window.addEventListener('keydown', (e) => {
+function handleGameInput(key) {
     if (isClashing) {
-        if(e.key === 'ArrowLeft') targetOffset -= 2.0;
-        if(e.key === 'ArrowRight') targetOffset += 2.0;
+        if(key === 'ArrowLeft') targetOffset -= 2.0;
+        if(key === 'ArrowRight') targetOffset += 2.0;
         targetOffset = Math.max(-15, Math.min(15, targetOffset));
     } else {
-        if(e.key === 'ArrowRight' && !spellL_active) { spellL_active = true; progressL = 0; progressBottomL = 0; }
-        if(e.key === 'ArrowLeft' && !spellR_active) { spellR_active = true; progressR = 0; progressBottomR = 0; }
+        if(key === 'ArrowRight' && !spellL_active) { spellL_active = true; progressL = 0; progressBottomL = 0; }
+        if(key === 'ArrowLeft' && !spellR_active) { spellR_active = true; progressR = 0; progressBottomR = 0; }
     }
 
     // TEST PROTEGO KEYS
-    if (e.key.toLowerCase() === 'a') {
+    if (key.toLowerCase() === 'a') {
         protegoP1.active = true;
         if (protegoP1.timer) clearTimeout(protegoP1.timer);
         protegoP1.timer = setTimeout(() => { protegoP1.active = false; }, 1500);
     }
-    if (e.key.toLowerCase() === 'd') {
+    if (key.toLowerCase() === 'd') {
         protegoP2.active = true;
         if (protegoP2.timer) clearTimeout(protegoP2.timer);
         protegoP2.timer = setTimeout(() => { protegoP2.active = false; }, 1500);
+    }
+}
+
+window.addEventListener('keydown', (e) => {
+    handleGameInput(e.key);
+});
+
+// Mobile touch controls (Tap left half = ArrowLeft, right half = ArrowRight)
+window.addEventListener('touchstart', (e) => {
+    const x = e.touches[0].clientX;
+    const width = window.innerWidth;
+    if (x < width / 2) {
+        handleGameInput('ArrowLeft');
+    } else {
+        handleGameInput('ArrowRight');
     }
 });
 
@@ -1266,6 +1304,13 @@ function animate() {
     // 2. LÓGICA DE MOVIMIENTO / COLISIÓN
     let intensity = 0;
     let pulse = 0;
+
+    // Colisión automática para modo manual (flechas/tap)
+    if (!isClashing && spellL_active && spellR_active && currentPosL >= currentPosR) {
+        isClashing = true;
+        clashOffset = (currentPosL + currentPosR) / 2;
+        targetOffset = clashOffset;
+    }
 
     if (isClashing) {
         clashOffset += (targetOffset - clashOffset) * 0.05;

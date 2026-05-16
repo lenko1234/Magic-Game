@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const _nSize = 32;
+const _nSize = 64;
 const _nData = new Uint8Array(_nSize * _nSize * 4);
 for (let i = 0; i < _nSize * _nSize * 4; i++) _nData[i] = Math.random() * 255;
 export const globalNoiseTex = new THREE.DataTexture(_nData, _nSize, _nSize, THREE.RGBAFormat);
@@ -49,10 +49,12 @@ void main() {
     float distFromCenter = abs(instanceMatrix[3][1]);
     vVerticalFade = 1.0 - clamp(distFromCenter / 3.5, 0.0, 1.0);
     
-    float snakeWave = snoise(vec3(normX * 3.0, aRandom * 50.0, strobeTime * 1.5));
+    float n1 = snoise(vec3(normX * 6.0, aRandom * 50.0, strobeTime * 3.0));
+    float n2 = snoise(vec3(normX * 18.0, aRandom * 150.0, strobeTime * 6.0));
+    float jagged = (abs(n1) + abs(n2) * 0.4) * uDirection;
     float envelope = 1.0 - pow(abs(normX * 2.0), 2.0);
-    pos.y += snakeWave * 2.5 * envelope * aParams.x;
-    pos.z += snoise(vec3(normX * 4.0, aRandom * 200.0, strobeTime * 1.5)) * 1.5 * envelope;
+    pos.y += jagged * 2.2 * envelope * aParams.x;
+    pos.z += snoise(vec3(normX * 8.0, aRandom * 200.0, strobeTime * 4.0)) * 1.5 * envelope;
     
     vec4 worldPos = instanceMatrix * vec4(pos, 1.0);
     vWorldPos = worldPos.xyz;
@@ -179,8 +181,10 @@ void main(){
     float compression = 1.0 - (node * 0.4);
     float macroFreq = (uLayer == 0.0) ? 0.1 : 0.3;
     float macroAmp = (uLayer == 0.0) ? 4.0 : 1.5;
-    float noise = snoise(vec3(p.y * macroFreq, t * 0.3, uSeed));
-    float snappedN = noise; 
+    float n1 = snoise(vec3(p.y * macroFreq, t * 0.4, uSeed));
+    float n2 = snoise(vec3(p.y * macroFreq * 3.0, t * 0.8, uSeed + 10.0));
+    float combined = n1 + n2 * 0.3;
+    float snappedN = pow(abs(combined), 1.1) * sign(combined); 
     float distToCore = smoothstep(0.4, 1.0, vUv.y);
     vDistToCore = distToCore;
     float gravityPull = pow(distToCore, 2.5);
@@ -191,10 +195,10 @@ void main(){
     float nz = p.x * sinT + p.z * cosT;
     p.x = mix(p.x, nx, gravityPull);
     p.z = mix(p.z, nz, gravityPull);
-    p.x += (snappedN * macroAmp) * compression + snoise(vec3(t * 1.5, t * 0.5, 0.0)) * gravityPull * 2.5;
-    p.z += (snoise(vec3(p.y * 0.3, t * 0.4, uSeed + 1.0)) * macroAmp * 0.3 * compression);
+    p.x += (snappedN * macroAmp) * compression;
+    p.z += (snoise(vec3(p.y * 0.3, t * 0.4, uSeed + 1.0)) * macroAmp * 0.2 * compression);
     vDisplace = snappedN;
-    vTension = abs(noise);
+    vTension = abs(combined); 
     float tip = (uDirection > 0.0) ? (uClashOffset + 25.0)/50.0 : (25.0 - uClashOffset)/50.0;
     float relProgress = clamp(vUv.y / tip, 0.0, 1.0);
     float tipConvergence = 1.0 - smoothstep(0.9, 1.0, relProgress);
